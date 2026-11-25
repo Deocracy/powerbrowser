@@ -1,0 +1,40 @@
+diff --git a/src/main/claude/claude-stream-json-connection.ts b/src/main/claude/claude-stream-json-connection.ts
+index 2d2c395d91..4c35989359 100644
+--- a/src/main/claude/claude-stream-json-connection.ts
++++ b/src/main/claude/claude-stream-json-connection.ts
+@@ -24,6 +24,10 @@ import type { ClaudeStructuredSdkOptions } from './structured/launch/claude-stru
+ import { withProviderSpawnAbsence } from '../provider-process/provider-executable-missing'
+ import { claudeStreamJsonExitError } from './claude-stream-json-exit-error'
+ import { withObservedProviderExit } from '../native-chat/agent-session-wire/structured-agent-session-failure-text'
++import { realpathSync } from 'node:fs'
++import { createRequire } from 'node:module'
++import { join, sep } from 'node:path'
++import { pathToFileURL } from 'node:url'
+ 
+ export { ClaudeControlRequestError }
+ 
+@@ -35,10 +39,23 @@ export const CLAUDE_READER_DRAIN_AFTER_EXIT_MS = 2_000
+ let claudeAgentSdk: Promise<typeof ClaudeAgentSdk> | null = null
+ 
+ export function loadClaudeAgentSdk(): Promise<typeof ClaudeAgentSdk> {
+-  claudeAgentSdk ??= import('@anthropic-ai/claude-agent-sdk')
++  // A host can ship the SDK outside the bundle; this names its package directory.
++  const dir = process.env.ORCA_CLAUDE_AGENT_SDK_DIR
++  claudeAgentSdk ??= dir === undefined ? import('@anthropic-ai/claude-agent-sdk') : importSdkFrom(dir)
+   return claudeAgentSdk
+ }
+ 
++function importSdkFrom(dir: string): Promise<typeof ClaudeAgentSdk> {
++  try {
++    const entry = createRequire(join(dir, 'package.json')).resolve('@anthropic-ai/claude-agent-sdk')
++    if (dir && entry.startsWith(realpathSync(dir) + sep)) {
++      return import(pathToFileURL(entry).href)
++    }
++  } catch {}
++  const error = new Error(`Cannot find package '@anthropic-ai/claude-agent-sdk' in '${dir}'`)
++  return Promise.reject(Object.assign(error, { code: 'ERR_MODULE_NOT_FOUND' }))
++}
++
+ function isRecord(value: unknown): value is Record<string, unknown> {
+   return typeof value === 'object' && value !== null
+ }

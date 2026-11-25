@@ -1,6 +1,6 @@
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import { ApplicationServer } from '@theia/core/lib/common/application-protocol';
-import { Command, CommandContribution, CommandRegistry, CommandService } from '@theia/core/lib/common';
+import { Command, CommandContribution, CommandRegistry, CommandService, MessageService } from '@theia/core/lib/common';
 
 // TEL-05 command half (Phase 53, plan 01). The palette command opens the Phase 42
 // bug form in the stock browser window through the GUI-01 opener, prefilled with
@@ -14,11 +14,12 @@ export const REPORT_BUG_COMMAND: Command = { id: REPORT_BUG_COMMAND_ID, label: '
 
 // The GUI-01 opener id, spelled here rather than imported: branding does not
 // depend on tab-uris, and browser-window-command.ts exports the same string.
-const OPEN_BROWSER_WINDOW_ID = 'powerbrowser.open-browser-window';
+export const OPEN_BROWSER_WINDOW_ID = 'powerbrowser.open-browser-window';
 const ISSUES_NEW_URL = 'https://github.com/Deocracy/powerbrowser/issues/new';
 const BUG_TEMPLATE = 'bug.yml';
 // shortcut: install format has no in-tree source (the install channel lives on the chrome side), so the field stays empty and the reporter fills it; upgrade when the shell publishes the install channel to the sidecar.
 const INSTALL_FORMAT_UNKNOWN = '';
+const REPORT_BUG_FAILED_COPY = 'PowerBrowser could not open the bug report form because the browser did not answer. Run PowerBrowser: Report a Bug again from the command palette.';
 
 function operatingSystem(userAgent: string): string {
     if (/Windows/i.test(userAgent)) return 'Windows';
@@ -34,6 +35,9 @@ export class PowerBrowserReportBugContribution implements CommandContribution {
 
     @inject(ApplicationServer)
     protected readonly appServer: ApplicationServer;
+
+    @inject(MessageService)
+    protected readonly messages: MessageService;
 
     /** Read once off the click path; the opener's window.open fallback needs the click's user activation. */
     private version = '';
@@ -59,6 +63,10 @@ export class PowerBrowserReportBugContribution implements CommandContribution {
             os: operatingSystem(navigator.userAgent),
             install_format: INSTALL_FORMAT_UNKNOWN,
         });
-        void this.commands.executeCommand(OPEN_BROWSER_WINDOW_ID, `${ISSUES_NEW_URL}?${params.toString()}`);
+        // The palette shows no command error, so a failed open is reported here. Fixed copy: the opener's
+        // rejection can carry a command id.
+        this.commands.executeCommand(OPEN_BROWSER_WINDOW_ID, `${ISSUES_NEW_URL}?${params.toString()}`).catch(() => {
+            this.messages.error(REPORT_BUG_FAILED_COPY);
+        });
     }
 }

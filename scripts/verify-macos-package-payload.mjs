@@ -372,7 +372,8 @@ export function runChecks(root, overrides = {}) {
 
     // 8. Sidecar paths derived from TheiaService under GreD (= Contents/Resources on macOS).
     const svc = read(THEIA_SERVICE_REL) ?? '';
-    const staged = [...new Set([...svc.matchAll(/\$\{appDir\}\/([A-Za-z0-9_./-]+)`/g)].map(m => m[1]))].sort();
+    // A .exe candidate is the Windows staged layout (package-windows.sh), never part of a macOS bundle.
+    const staged = [...new Set([...svc.matchAll(/\$\{appDir\}\/([A-Za-z0-9_./-]+)`/g)].map(m => m[1]).filter(p => !p.endsWith(".exe")))].sort();
     if (staged.length === 0) r.fail(`${THEIA_SERVICE_REL} names no \${appDir}/... staged path, so the sidecar layout cannot be derived. Next step: check this gate's derivation against _resolveSidecar`);
     if (bundle) {
         for (const p of staged) {

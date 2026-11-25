@@ -43,7 +43,7 @@
 //  4. Empty sets are named, never silent. Zero published buildIDs is a PASS with a named count:
 //     with nothing published, no descriptor can be a downgrade. Zero candidates under the default
 //     tree (gitignored, so every clean checkout) prints a SKIP verdict naming the count and the
-//     emit step, never a PASS claiming every candidate was compared.
+//     emit step and exits 77 (SKIP-PROTOCOL.md), never a PASS claiming every candidate was compared.
 //
 // Rollback boundary. This row is the refusal. A deliberate downgrade (--rollback-to) is an
 // owner-dispatched override that belongs to the Phase 49/50 withdraw and descriptor path
@@ -67,6 +67,7 @@ import { fileURLToPath } from 'node:url';
 import { buildUpdateXml, parseUpdateXml } from './verify-mar-update-hop.mjs';
 import { API_VERSION_HEADER, repoSlug } from './verify-repo-controls.mjs';
 import { MANIFEST_ASSET, RELEASE_KEY_RE } from './lib/channel-identity.mjs';
+import { SKIP_EXIT } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'descriptor-monotonic';
@@ -353,9 +354,10 @@ export function verdict({ failures, published, candidates, notes }) {
     const emptyNote = published.length === 0 ? ' (zero published buildIDs: nothing to compare against)' : '';
     if (candidates.length === 0) {
         // Not a PASS: the default tree is gitignored, so this is every clean checkout. An explicit
-        // --descriptors tree with zero descriptors never reaches here; runChecks fails it.
+        // --descriptors tree with zero descriptors never reaches here; runChecks fails it. Exit 77: the
+        // comparison did not run (SKIP-PROTOCOL.md), and the one SKIP line is the only line printed.
         return {
-            code: 0,
+            code: SKIP_EXIT,
             stream: 'stdout',
             lines: [`${NAME}: SKIP -- ${notes.join('; ')}${emptyNote}; no candidate descriptor exists, so no offered buildID was compared. Next step: run node scripts/build-update-xml.mjs --emit --outdir ${CANDIDATE_REL}, or pass --descriptors <dir>.`],
         };
@@ -703,8 +705,10 @@ function selfTest() {
                 `${fromDisk.failures.join(' | ')} ${pass.lines[0]}`],
             ['a symlinked target directory is followed and read', fromLink.failures.length === 0 && fromLink.candidates.length === 1,
                 `${fromLink.candidates.length} candidate(s); ${fromLink.failures.join(' | ')}`],
-            ['zero candidates under the default tree is a named SKIP, not a PASS claiming every candidate', skip.code === 0
-                && skip.lines[0].startsWith(`${NAME}: SKIP -- `) && skip.lines[0].includes('0 candidate descriptor(s)') && !/every candidate|each of/.test(skip.lines[0]),
+            // verdict() prints nothing, so this in-process control cannot leak a SKIP line into the self-test's output;
+            // a child of the main mode would need a gh api read of the published Releases.
+            ['zero candidates under the default tree is a named SKIP with exit 77, not a PASS claiming every candidate', skip.code === SKIP_EXIT
+                && skip.lines.length === 1 && skip.stream === 'stdout' && skip.lines[0].startsWith(`${NAME}: SKIP -- `) && skip.lines[0].includes('0 candidate descriptor(s)') && !/every candidate|each of/.test(skip.lines[0]),
                 skip.lines[0]],
         ];
         for (const [name, ok, got] of disk) {

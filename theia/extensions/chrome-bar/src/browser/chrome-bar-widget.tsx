@@ -3,6 +3,7 @@ import { createPortal } from '@theia/core/shared/react-dom';
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import {
     ApplicationShell,
+    ContextMenuAccess,
     ContextMenuRenderer,
     FrontendApplicationContribution,
     HoverService,
@@ -12,6 +13,7 @@ import {
 import { CommandMenu, CommandRegistry, CompoundMenuNode, Disposable, MenuPath } from '@theia/core/lib/common';
 import { PreferenceScope, PreferenceService } from '@theia/core/lib/common/preferences';
 import { KeybindingRegistry } from '@theia/core/lib/browser/keybinding';
+import { BrowserContextMenuAccess } from '@theia/core/lib/browser/menu/browser-context-menu-renderer';
 import { PerspectiveService } from '@theia/core/lib/browser/perspective-service';
 import { FileDialogService } from '@theia/filesystem/lib/browser';
 import { DownloadAction, WebTabChannel, WebTabDownloadRow, WebTabOpenHandler, WebTabSharing, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
@@ -51,13 +53,15 @@ import {
     setOpenDownloadsPanel,
     setOpenFindBar,
     setOpenStockPage,
+    setRepaintChromeBar,
     setReopenLastClosedTab,
     setToggleBookmarksToolbar,
     setToggleFullScreen,
 } from './chrome-bar-commands';
 import { CHROME_BAR_COPY, appSubject, downloadBytes, historyLabel, notificationBarCopy } from './chrome-bar-copy';
 import { HOME_PAGE_PREFERENCE, SHOW_BOOKMARKS_TOOLBAR_PREFERENCE, SHOW_HOME_BUTTON_PREFERENCE } from './chrome-bar-preferences';
-import { AddressBar, DROPDOWN_MAX_HEIGHT, DropTargetDragEvent, droppedUrlOf } from './address-bar/address-bar';
+import { AddressBar, DropTargetDragEvent, droppedUrlOf, dropdownMaxHeight } from './address-bar/address-bar';
+import { FAVICON_REQUEST_LIMIT } from './address-bar/address-bar-rows';
 import { BUTTON_SHORTCUTS, NavButton, pageKeyLabel, tooltipFor } from './chrome-bar-shortcuts';
 import { MODES_ACTIVATE_COMMAND_ID } from '@powerbrowser/modes/lib/browser/modes-commands';
 import { ModeService } from '@powerbrowser/modes/lib/browser/mode-service';
@@ -74,6 +78,8 @@ import { ProfileStorageService } from '@powerbrowser/tab-uris/lib/browser/profil
 import { MENU_ORDER, MENU_PHASE } from './site-identity/site-identity-table';
 import { APP_MENU_ID, AppMenuRow, AppMenuSubmenu, WIRED_MENU_IDS, buildAppMenu, withinBudget } from './site-identity/app-menu';
 import { MODE_ATTRIBUTE } from '@powerbrowser/modes/lib/browser/mode-attribute';
+import { REINSTALL_CLAUDE } from '@powerbrowser/bundled-extensions/lib/browser/reinstall-command';
+import { REINSTALL_COMMAND_LABEL } from '@powerbrowser/bundled-extensions/lib/common/bundled-extensions-copy';
 import '../../src/browser/chrome-bar.css';
 
 /** NAV-03: the session-history menu's path. The menu is built per request from the history reply, never registered. */
@@ -135,6 +141,11 @@ const APP_MENU_COMMANDS: Readonly<Record<string, string>> = Object.freeze({
 /** PAGE-09 (33-05): the Edit submenu's commands, each with the frozen edit cmd its command sends and the page reports on. */
 type EditCmd = Parameters<WebTabWidget['edit']>[0];
 const EDIT_MENU_CMDS: readonly EditCmd[] = Object.freeze(['cmd_undo', 'cmd_redo', 'cmd_cut', 'cmd_copy', 'cmd_paste', 'cmd_selectAll'] as EditCmd[]);
+
+/** Per-request menu children in the order given: each one's sortString is its index. */
+function inOrder<T extends CommandMenu | CompoundMenuNode>(children: T[]): T[] {
+    return children.map((child, index) => ({ ...child, sortString: String(index).padStart(2, '0') }));
+}
 
 /** NAV-03: Firefox's click-hold delay before Back/Forward open the history menu. */
 const HISTORY_HOLD_MS = 500;
@@ -223,7 +234,7 @@ function ClearHistoryPicker(props: ClearHistoryPickerProps): React.ReactElement 
             role='dialog'
             aria-label={heading}
             tabIndex={-1}
-            style={{ position: 'fixed', top, right, maxHeight: Math.max(0, Math.min(DROPDOWN_MAX_HEIGHT, window.innerHeight - top - 8)) }}
+            style={{ position: 'fixed', top, right, maxHeight: dropdownMaxHeight(top) }}
             onKeyDown={e => {
                 if (e.key === 'Escape') {
                     e.stopPropagation();
@@ -388,8 +399,8 @@ export class ChromeBarWidget extends ReactWidget {
 
     static readonly ID = 'powerbrowser.chrome-bar';
 
-    /** The three shipped mode defaults, in contracted order. */
-    static readonly MODES = ['Coding', 'Browsing', 'Organising'];
+    /** The four shipped mode defaults, in contracted order. */
+    static readonly MODES = ['Coding', 'Browsing', 'Organising', 'Orca'];
 
     @inject(CommandRegistry)
     protected readonly commands: CommandRegistry;
@@ -516,6 +527,7 @@ export class ChromeBarWidget extends ReactWidget {
         setOpenClearHistory(() => this.openClearHistoryPicker());
         setToggleFullScreen(() => void this.toggleFullScreenRow());
         setOpenStockPage(page => void this.openStockPageRow(page));
+        setRepaintChromeBar(() => this.update());
         this.toDispose.push(this.webTabs.onDidChangeDownloads(rows => {
             this.downloadRows = rows;
             this.update();
@@ -528,10 +540,12 @@ export class ChromeBarWidget extends ReactWidget {
         }));
         // PROMPT-08: chrome pushes a hovered link only for an overlay; a tab this frontend no longer has is ignored.
         this.toDispose.push(this.webTabs.onPush('overLink', detail => {
-            if (typeof detail.tabId !== 'string' || !this.webTabs.widgetOf(detail.tabId)) {
+            const url = typeof detail.url === 'string' ? detail.url : '';
+            // A clear always applies: chrome names the tab whose link it showed, which may be a tab just closed.
+            if (url && (typeof detail.tabId !== 'string' || !this.webTabs.widgetOf(detail.tabId))) {
                 return;
             }
-            this.pageStatus = typeof detail.url === 'string' ? detail.url : '';
+            this.pageStatus = url;
             this.update();
         }));
         // NAV-04: toggling either Home setting updates the bar live, with no reload.
@@ -636,7 +650,7 @@ export class ChromeBarWidget extends ReactWidget {
             this.menuGroup('clear', [this.menuLeaf('clear-history', CHROME_BAR_COPY.clearRecentHistoryRow,
                 () => this.openClearHistoryPicker(this.appMenuButton ?? undefined), true, this.acceleratorOf(CHROME_BAR_CLEAR_HISTORY_COMMAND_ID))]),
         ];
-        return children.map((child, index) => ({ ...child, sortString: String(index).padStart(2, '0') }));
+        return inOrder(children);
     }
 
     /**
@@ -767,11 +781,12 @@ export class ChromeBarWidget extends ReactWidget {
         if (items === 'failed') {
             return;
         }
-        // placesFavicons takes at most 10 urls per request.
-        const icons: Record<string, string> = {};
-        for (let at = 0; at < items.length; at += 10) {
-            Object.assign(icons, await this.store.placesFavicons(items.slice(at, at + 10).map(row => row.url)).catch(() => ({})));
+        // placesFavicons takes at most FAVICON_REQUEST_LIMIT urls per request; the requests are independent, so they run together.
+        const chunks: string[][] = [];
+        for (let at = 0; at < items.length; at += FAVICON_REQUEST_LIMIT) {
+            chunks.push(items.slice(at, at + FAVICON_REQUEST_LIMIT).map(row => row.url));
         }
+        const icons: Record<string, string> = Object.assign({}, ...await Promise.all(chunks.map(urls => this.store.placesFavicons(urls).catch(() => ({})))));
         if (seq === this.toolbarSeq) {
             this.toolbarIcons = icons;
             this.update();
@@ -794,7 +809,8 @@ export class ChromeBarWidget extends ReactWidget {
                 tab.focusPage();
                 return;
             }
-            const ref = tab ?? this.shell.currentWidget;
+            // The main area's current tab, never the focus tracker's widget: a side or bottom widget would take the new tab into its area.
+            const ref = tab ?? this.shell.mainPanel.currentTitle?.owner;
             const widget = ref ? await this.webTabOpener.openInBackground(url, ref) : await this.webTabOpener.openUrl(url);
             await this.addressBar.joinActiveGroup(widget);
             if (target !== 'background') {
@@ -831,7 +847,7 @@ export class ChromeBarWidget extends ReactWidget {
             sortString: '',
             isVisible: () => true,
             isEmpty: () => children.length === 0,
-            children: children.map((child, index) => ({ ...child, sortString: String(index).padStart(2, '0') })),
+            children: inOrder(children),
         };
     }
 
@@ -983,14 +999,22 @@ export class ChromeBarWidget extends ReactWidget {
             // after that release's click, wherever it lands, so a later keyboard
             // Enter/Space (a click with no pointerdown) is never eaten. A hold
             // ended by pointercancel delivers no pointerup, so that clears it too.
+            const opened = this.openHistoryMenu(button);
             const done = (): void => {
                 window.removeEventListener('pointerup', done, true);
                 window.removeEventListener('pointercancel', done, true);
-                setTimeout(() => { this.suppressNavClick = false; });
+                setTimeout(() => {
+                    this.suppressNavClick = false;
+                    // WINDOWS 27: a real release off the button (on the pill) takes focus from the open menu, so Escape would miss it.
+                    void opened.then(access => {
+                        if (access instanceof BrowserContextMenuAccess && access.menu.isAttached && !access.menu.node.contains(document.activeElement)) {
+                            access.menu.activate();
+                        }
+                    });
+                });
             };
             window.addEventListener('pointerup', done, true);
             window.addEventListener('pointercancel', done, true);
-            this.openHistoryMenu(button);
         }, HISTORY_HOLD_MS);
     };
 
@@ -1071,10 +1095,10 @@ export class ChromeBarWidget extends ReactWidget {
      * shows the one disabled error item. `.lm-Menu` is in the overlay's
      * blocking-layer selector, so the page hides while it is open.
      */
-    protected async openHistoryMenu(button: HTMLElement): Promise<void> {
+    protected async openHistoryMenu(button: HTMLElement): Promise<ContextMenuAccess | undefined> {
         const tab = currentWebTab();
         if (!tab) {
-            return;
+            return undefined;
         }
         const reply = await tab.history().catch(() => undefined);
         const entries = reply?.ok && reply.where === 'done' ? reply.entries ?? [] : [];
@@ -1107,7 +1131,7 @@ export class ChromeBarWidget extends ReactWidget {
             }];
         const menu: CompoundMenuNode = { id: 'history', sortString: '0', children, isVisible: () => true, isEmpty: () => false };
         const rect = button.getBoundingClientRect();
-        this.menus.render({
+        return this.menus.render({
             menuPath: HISTORY_MENU_PATH,
             menu,
             anchor: { x: rect.left, y: rect.bottom },
@@ -1212,7 +1236,7 @@ export class ChromeBarWidget extends ReactWidget {
      */
     protected appSubmenu(menuId: string, bookmarks: PlaceMatch[] | 'failed', editState: Partial<Record<EditCmd, boolean>> = {}): AppMenuSubmenu | undefined {
         const ordered = (children: (CommandMenu | CompoundMenuNode)[]): AppMenuSubmenu => ({
-            children: children.map((child, index) => ({ ...child, sortString: String(index).padStart(2, '0') })) as unknown as AppMenuSubmenu['children'],
+            children: inOrder(children) as unknown as AppMenuSubmenu['children'],
         });
         switch (menuId) {
             case 'bookmarks': {
@@ -1263,6 +1287,8 @@ export class ChromeBarWidget extends ReactWidget {
             case 'help':
                 return ordered([
                     this.menuLeaf('get-help', CHROME_BAR_COPY.getHelpRow, () => this.openStockPageRow('support')),
+                    // Owner ruling 2026-11-16: reachable in every mode, shown only while the command's own isVisible holds.
+                    ...(this.commands.isVisible(REINSTALL_CLAUDE.id) ? [this.commandLeaf('reinstall-claude', REINSTALL_COMMAND_LABEL, REINSTALL_CLAUDE.id)] : []),
                     this.menuGroup('help-about', [this.menuLeaf('about', CHROME_BAR_COPY.aboutAppRow(appSubject()), () => this.openStockPageRow('about'))]),
                 ]);
             default:
@@ -1341,6 +1367,10 @@ export class ChromeBarWidget extends ReactWidget {
         this.stateSubscription = undefined;
         // The find bar belongs to the tab it was opened on; the query stays in that tab.
         this.setFindOpen(false);
+        // The Downloads button and command need a web tab; without one an open panel could not be closed.
+        if (!(widget instanceof WebTabWidget)) {
+            this.downloadsOpen = false;
+        }
         if (widget instanceof WebTabWidget) {
             let wasLoading = widget.loading;
             this.stateSubscription = widget.onDidChangeState(state => {
@@ -1450,6 +1480,11 @@ export class ChromeBarWidget extends ReactWidget {
         if (this.activeCustomId !== undefined && !customs.some(row => row.id === this.activeCustomId)) {
             this.activeCustomId = undefined;
         }
+    }
+
+    /** The mode id the toggle shows. */
+    get shownModeId(): string {
+        return this.activeCustomId ?? this.mode.toLowerCase();
     }
 
     /**
@@ -1664,6 +1699,34 @@ export class ChromeBarWidget extends ReactWidget {
         </span>;
     }
 
+    /**
+     * Phase 66 (P66-21, P66-22, D-19): the agent mark for the current web tab, read only from chrome's agentControlChanged
+     * push. agent-browser-04: shown on every tab chrome reports as an agent tab, not only while an agent drives it and
+     * not by the widget's own flag (a restored agent row carries none), so the user can stop an agent
+     * before it acts. Its Stop button and, on a stopped agent tab, its Resume button are the only callers of agentStop();
+     * Stop ends agent control of every agent tab and refuses new ones until Resume. No command, keybinding or menu
+     * reaches either.
+     */
+    protected renderAgentControl(): React.ReactNode {
+        const tab = currentWebTab();
+        if (!tab?.agentControl.agent) {
+            return undefined;
+        }
+        const subject = appSubject();
+        const { active, stopped } = tab.agentControl;
+        const label = stopped ? CHROME_BAR_COPY.agentStoppedLabel : active ? CHROME_BAR_COPY.agentControlLabel : CHROME_BAR_COPY.agentIdleLabel;
+        const tooltip = stopped ? CHROME_BAR_COPY.agentStoppedTooltip(subject) : active ? CHROME_BAR_COPY.agentControlTooltip(subject) : CHROME_BAR_COPY.agentIdleTooltip(subject);
+        const action = stopped ? CHROME_BAR_COPY.agentResumeTooltip(subject) : CHROME_BAR_COPY.agentStopTooltip(subject);
+        return <span className='pb-chrome-bar-agent'>
+            <span className='codicon codicon-robot' role='img' aria-label={label} title={tooltip} />
+            <span className='pb-chrome-bar-agent-label'>{label}</span>
+            <button type='button' className='pb-chrome-bar-button pb-chrome-bar-agent-stop' title={action} aria-label={action}
+                onClick={() => void currentWebTab()?.agentStop(stopped)}>
+                {stopped ? CHROME_BAR_COPY.agentResumeLabel : CHROME_BAR_COPY.agentStopLabel}
+            </button>
+        </span>;
+    }
+
     /** PAGE-02: the zoom chip, shown only while the pushed level is not 100%; one click resets it. */
     protected renderZoomChip(): React.ReactNode {
         const tab = currentWebTab();
@@ -1875,6 +1938,7 @@ export class ChromeBarWidget extends ReactWidget {
             {this.pageStatus && <span className='pb-page-status' aria-label={this.pageStatus}>{this.pageStatus}</span>}
             {this.renderReaderToggle()}
             {this.renderSharing()}
+            {this.renderAgentControl()}
             {this.renderZoomChip()}
             {this.extensionActions.render()}
             <button
@@ -2020,7 +2084,16 @@ export class ChromeBarContribution implements FrontendApplicationContribution {
             this.applyStripHome(document.body.getAttribute(MODE_ATTRIBUTE) ?? '');
             this.scheduleDragRegions();
         };
-        new MutationObserver(apply).observe(document.body, { attributeFilter: [MODE_ATTRIBUTE] });
+        // A reload restores the active perspective with no perspective event, so the toggle follows the published mode
+        // too; a mode the toggle already shows is left alone (syncModeFromPerspective resets the pill).
+        const follow = () => {
+            apply();
+            const id = document.body.getAttribute(MODE_ATTRIBUTE);
+            if (id && id !== this.barWidget.shownModeId) {
+                this.barWidget.syncModeFromPerspective(id);
+            }
+        };
+        new MutationObserver(follow).observe(document.body, { attributeFilter: [MODE_ATTRIBUTE] });
         // Re-assert on every shell add and remove, not only on a mode change.
         // The dock creates its tab bars as it needs them, and a bar that
         // appears after the switch has never been told which mode it is in --
@@ -2070,7 +2143,10 @@ export class ChromeBarContribution implements FrontendApplicationContribution {
         // nothing to take its place leaves 32px of dead space above the
         // canvas. Showing the strip there fills exactly that, and the tabs
         // stay reachable while their cards are being arranged below.
-        const ideDress = modeId === 'coding';
+        //
+        // P64-19: the Orca mode asks for the IDE dress, so every dock tab bar
+        // shows for Orca's splits.
+        const ideDress = modeId === 'coding' || modeId === 'orca';
         // The strip is Browsing's home only. Organising's tabs are the cards
         // on its canvas, so a strip there would be the same tabs twice -- it
         // was carried there briefly only to fill the space the menubar left,
@@ -2139,8 +2215,23 @@ export class ChromeBarContribution implements FrontendApplicationContribution {
         // onDidAddWidget, which is what runs this.
         // A collapsed side stays hidden even in Coding: its icons are across
         // its own top, so there is no rail to leave standing.
-        this.shell.leftPanelHandler.container.setHidden(!ideDress || this.shell.leftPanelHandler.dockPanel.isHidden);
-        this.shell.rightPanelHandler.container.setHidden(!ideDress || this.shell.rightPanelHandler.dockPanel.isHidden);
+        //
+        // Not while a mode switch is in flight. The attribute is published
+        // last (ModeService.activateMode), so during the switch it still names
+        // the mode being left while the perspective already names the one
+        // being entered, and a saved layout that re-adds a side view fires
+        // onDidAddWidget mid-restore. Acting on the old mode then hid a side
+        // container between Theia's queued size request and its application:
+        // the request ran against a hidden handle, and when the switch showed
+        // the container again Lumino gave it its minimum (100 px). Returning
+        // to Orca from Browsing or Organising left Orca's sidebar at 100 px
+        // (debug orca-mode-fresh-profile-look round 3, owner 2026-11-19;
+        // orca-side-panel-live clause m). The switch asserts both containers
+        // itself, and its attribute publish runs this again.
+        if (this.perspectives.getActivePerspectiveId() === modeId) {
+            this.shell.leftPanelHandler.container.setHidden(!ideDress || this.shell.leftPanelHandler.dockPanel.isHidden);
+            this.shell.rightPanelHandler.container.setHidden(!ideDress || this.shell.rightPanelHandler.dockPanel.isHidden);
+        }
         // Showing a tab bar changes its class; it does not, on its own, make
         // the dock re-run its layout. Without this the dock kept allocating
         // the content as if the bar were still hidden, so the page was drawn
@@ -2246,7 +2337,7 @@ export class ChromeBarContribution implements FrontendApplicationContribution {
             // 34 T1 (39-18): the whole strip is kept clear, so a real double-click on its empty space reaches
             // onStripDoubleClick (New Tab) instead of the desktop's maximize toggle; only space beside it moves the window.
             rows.push({ row: this.tabStrip.node, items: [this.tabStrip.node] });
-        } else if (mode === 'coding' && menubar) {
+        } else if ((mode === 'coding' || mode === 'orca') && menubar) {
             rows.push({
                 row: menubar,
                 items: [...Array.from(menubar.querySelectorAll('.lm-MenuBar-item')), ...Array.from(this.layoutControls.node.children)],
@@ -2301,6 +2392,9 @@ export class ChromeBarContribution implements FrontendApplicationContribution {
         window.addEventListener('resize', () => this.scheduleDragRegions());
         new MutationObserver(() => this.scheduleDragRegions())
             .observe(this.tabStrip.node, { childList: true, subtree: true, characterData: true, attributes: true });
+        // A control appearing or leaving in the bar moves its gaps, which are drag handles too.
+        new MutationObserver(() => this.scheduleDragRegions())
+            .observe(this.barWidget.node, { childList: true, subtree: true });
         // TAB-04 (34-02): an overflowing row scrolls its tabs under the handles; scroll does not bubble, so capture.
         this.tabStrip.node.addEventListener('scroll', () => this.scheduleDragRegions(), true);
         void this.webTabs.request({ kind: 'windowChrome' }).then(reply => {

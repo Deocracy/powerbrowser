@@ -1,22 +1,80 @@
 #!/usr/bin/env bash
 # powerbrowser/packaging/package-linux.sh -- the Linux package (NG-063, NG-072).
 # Runs `./mach package`, then:
-#   - stages the Theia sidecar, the pinned official Node release (R13) and
-#     distribution/policies.json into the packaged app dir;
+#   - stages the Theia sidecar, the pinned official Node release (R13), Orca's
+#     orcad and web client (<GreD>/orca, P68-01) and distribution/policies.json
+#     into the packaged app dir;
 #   - refreshes precomplete, because full MARs are made from this dir;
 #   - rewrites the tarball mach wrote, then makes the complete MAR from the same dir.
 # It packages the RELEASE objdir: the one the release mozconfig builds into
 # (MOZ_OBJDIR default, read by scripts/lib/release-objdir.mjs), and it passes the
 # release mozconfig to mach, so `mach package` cannot reach the dev objdir/.
 # The dev tree is never touched.
-# Run from the repo root after a release Gecko build and a Theia `yarn build`:
-#   bash powerbrowser/packaging/package-linux.sh   (inside pb-gecko-build, DSH-BLOCKED.md step 4)
+# Run from the repo root after a release Gecko build, a Theia `yarn build` and an Orca build:
+#   bash powerbrowser/packaging/package-linux.sh   (inside pb-gecko-build, DSH-BLOCKED.md step 4;
+#                                                   release.yml passes -e PB_HOST_ROOT="$PWD")
+#   PB_HOST_ROOT="$PWD" bash powerbrowser/packaging/package-linux.sh --orca-stage-only DIR
+#       stages only DIR/orca, strips its RUNPATHs and runs the host-root grep over it, so a host
+#       without the release container can prove the Orca half. release.yml never uses it.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+fail() { echo "package-linux: FAIL -- $*" >&2; exit 1; }
+
+# P68-01: the packaged Orca root is exactly orca/'s package.json, out/orcad and out/web, plus Orca's
+# own LICENSE (packaging-prefs-network-02) (orca-packaged-tree compares it with the built tree as a set). Nothing else from orca/ ships:
+# no root node_modules, no out/orcad-prebuilds, no out/runtimes (build-orca.sh de-slots, D-14).
+need_orca() {
+    test -f "$1/out/orcad/orcad.js" || fail "orca/out/orcad/orcad.js is absent; run bash scripts/fetch-orca.sh and nix develop .#orca --command bash scripts/build-orca.sh first (docs/BUILD.md Orca half)"
+}
+stage_orca() {
+    need_orca "$1"
+    mkdir -p "$2/out"
+    cp -a "$1/package.json" "$2/package.json"
+    cp -a "$1/out/orcad" "$2/out/orcad"
+    cp -a "$1/out/web" "$2/out/web"
+    # packaging-prefs-network-02: Orca's own MIT notice, verified against the licence allowlist.
+    bash "$ROOT/powerbrowser/packaging/stage-orca-licence.sh" "$ROOT" "$2"
+}
+# PKG-22 / research Pitfall 7: native files carry a RUNPATH naming the build host (node-pty's pty.node
+# carries a Nix one). Per-file `|| true`: --remove-rpath on a non-ELF fails harmlessly; the portable-elf
+# row, not this loop's silence, is the verdict.
+strip_runpaths() {
+    local staged_elf
+    while IFS= read -r staged_elf; do
+        patchelf --remove-rpath "$staged_elf" 2>/dev/null || true
+    done < <(find "$@" -type f 2>/dev/null || true)
+}
+# P68-29: no staged file may name the host checkout. In the container the checkout is mounted at /src,
+# a string Theia's bundle and Orca's output legitimately carry (node_modules/.../src/...), so the search
+# is for the host build root release.yml passes in as PB_HOST_ROOT, as package-windows.sh searches for
+# the hosted sidecar's BUILD_ROOT. Unset, the grep would look for nothing, so that is a failure.
+# 68-WR-02: grep exits 1 for no match and 2 for an error (an unreadable file, a missing target, an
+# I/O error). An error is a failure, not a pass, as check-win-sidecar.sh purge states.
+host_root_grep() {
+    local hits rc=0
+    hits="$(grep -rlF -e "$PB_HOST_ROOT/" -- "$@")" || rc=$?
+    [ "$rc" -le 1 ] || fail "grep could not read the stage while looking for $PB_HOST_ROOT/ (exit $rc)"
+    [ -z "$hits" ] || fail "the staged tree still carries the host checkout path $PB_HOST_ROOT/: $(head -n1 <<<"$hits")"
+}
+if [ "$#" -gt 0 ] && ! { [ "$1" = "--orca-stage-only" ] && [ "$#" -eq 2 ]; }; then
+    echo "usage: bash powerbrowser/packaging/package-linux.sh [--orca-stage-only DIR]" >&2
+    exit 2
+fi
+test -n "${PB_HOST_ROOT:-}" || fail "PB_HOST_ROOT is unset; release.yml passes it into the container, see package-windows.sh"
+if [ "$#" -eq 2 ]; then
+    command -v patchelf >/dev/null || fail "patchelf is absent; run inside nix develop .#firefox or with nix shell nixpkgs#patchelf"
+    rm -rf "$2/orca"
+    stage_orca "$ROOT/orca" "$2/orca"
+    strip_runpaths "$2/orca"
+    host_root_grep "$2/orca"
+    echo "package-linux: staged $2/orca (RUNPATHs stripped, no $PB_HOST_ROOT/ found)"
+    exit 0
+fi
+
 OBJ="$ROOT/$(node "$ROOT/scripts/lib/release-objdir.mjs")"
 APP="$ROOT/theia/applications/browser"
-fail() { echo "package-linux: FAIL -- $*" >&2; exit 1; }
 test -f "$APP/lib/backend/main.js" || fail "$APP/lib/backend/main.js is absent; run yarn build in theia/ first"
+need_orca "$ROOT/orca"
 
 # The pinned official Node release (R13), downloaded once into the git-ignored .mozbuild/.
 # Its release-key provenance: the sha256 pin in powerbrowser/packaging/node-runtime.json
@@ -44,8 +102,9 @@ echo "$NODE_SHA  $ARCHIVE" | sha256sum -c --quiet - || { rm -f "$ARCHIVE"; fail 
 VERSION="$(sed -n 's/^Version=//p' "$OBJ/dist/bin/application.ini")"
 STAGE="$(find "$OBJ/dist" -mindepth 1 -maxdepth 1 -type d -newer "$OBJ/dist/bin/application.ini" -exec test -f '{}/precomplete' \; -print | head -n 1)"
 test -n "$STAGE" || { echo "package-linux: FAIL -- no staged app dir with a precomplete under $OBJ/dist" >&2; exit 1; }
-rm -rf "$STAGE/theia" "$STAGE/node"
+rm -rf "$STAGE/theia" "$STAGE/node" "$STAGE/orca"
 mkdir -p "$STAGE/theia" "$STAGE/node/bin" "$STAGE/distribution"
+stage_orca "$ROOT/orca" "$STAGE/orca"
 cp -a "$APP/lib" "$STAGE/theia/lib"
 find "$STAGE/theia/lib" -name '*.map' -delete
 cp "$APP/package.json" "$STAGE/theia/package.json"
@@ -60,9 +119,12 @@ mkdir -p "$STAGE/theia/node_modules/better-sqlite3/lib" "$STAGE/theia/node_modul
 cp -a "$ROOT/theia/node_modules/better-sqlite3/lib/." "$STAGE/theia/node_modules/better-sqlite3/lib/"
 cp "$ROOT/theia/node_modules/better-sqlite3/package.json" "$STAGE/theia/node_modules/better-sqlite3/package.json"
 cp "$ROOT/theia/node_modules/better-sqlite3/prebuilds/linux-x64.node" "$STAGE/theia/node_modules/better-sqlite3/prebuilds/linux-x64.node"
+# 63-CR-01: the Claude Code process wrapper, where the orca-agents backend's require.resolve finds it.
+bash "$ROOT/powerbrowser/packaging/stage-orca-agents-wrapper.sh" "$ROOT" "$STAGE/theia"
 tar -xJf "$ARCHIVE" -C "$STAGE/node" --strip-components=1 "node-$NODE_VERSION-linux-x64/bin/node" "node-$NODE_VERSION-linux-x64/LICENSE"
 test "$("$STAGE/node/bin/node" --version)" = "$NODE_VERSION" || fail "the staged node does not report $NODE_VERSION"
 cp "$ROOT/powerbrowser/distribution/policies.json" "$STAGE/distribution/policies.json"
+bash "$ROOT/powerbrowser/packaging/stage-bundled-xpi.sh" "$STAGE/distribution"
 # M-6: no checkout path ships in the sidecar. Two sources, both build-host-only:
 # native .node files carry a RUNPATH naming the checkout's build dir, and the
 # backend bundles carry esbuild `node-file:` module keys and comments naming
@@ -74,25 +136,20 @@ cp "$ROOT/powerbrowser/distribution/policies.json" "$STAGE/distribution/policies
 # could collide -- and the comments are inert.
 # patchelf is in the firefox dev shell this script runs in (and in the
 # release container). PKG-22 (Phase 45): the strip covers the row's full ELF
-# universe, not only the natives glob -- every staged ELF under theia/ and
-# node/ (Gecko libs included once the container build stages them) -- because
-# the portable-elf row walks the whole extracted tarball. Per-file `|| true`
-# keeps one unreadable file from failing staging; the row (not the loop's
-# silence) is the verdict. Idempotent: --remove-rpath on an already-clean ELF
-# is a no-op, so re-running staging prints the same tree.
-while IFS= read -r staged_elf; do
-    patchelf --remove-rpath "$staged_elf" 2>/dev/null || true
-done < <(find "$STAGE/theia" "$STAGE/node" -type f 2>/dev/null || true)
+# universe, not only the natives glob -- every staged ELF under theia/, node/
+# and orca/ (Gecko libs included once the container build stages them) --
+# because the portable-elf row walks the whole extracted tarball. Idempotent:
+# --remove-rpath on an already-clean ELF is a no-op, so re-running staging
+# prints the same tree.
+strip_runpaths "$STAGE/theia" "$STAGE/node" "$STAGE/orca"
 perl -pi -e 's{//\s*node-file:\S+}{// node-file:<buildhost>}; s{"node-file:[^"]+"}{"node-file:<buildhost>"}g' \
     "$STAGE/theia/lib/backend/main.js" "$STAGE/theia/lib/backend/parcel-watcher.js"
-# ng063-style assertion: no staged file under theia/ or node/ may still carry
-# the checkout path (here: the running checkout at package time). A missed file
+# ng063-style assertion: no staged file under theia/, node/ or orca/ may still
+# carry the host checkout path (PB_HOST_ROOT, see host_root_grep). A missed file
 # fails the run naming it, before precomplete is refreshed. The pattern is the
 # checkout prefix, not bare /home/: third-party sources legitimately contain
 # strings like "/home/" + user or "/home/.theia" that name no builder path.
-while IFS= read -r hit; do
-    fail "the staged sidecar still carries a checkout path: $hit"
-done < <(grep -rlF "$ROOT/" "$STAGE/theia" "$STAGE/node" 2>/dev/null || true)
+host_root_grep "$STAGE/theia" "$STAGE/node" "$STAGE/orca"
 ( cd "$STAGE" && python3 "$ROOT/upstream/config/createprecomplete.py" )
 
 # PKG-21 (Phase 45): the release manifest beside the rewritten tarball --

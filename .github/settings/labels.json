@@ -47,6 +47,8 @@
     { "name": "state/UPTAKE_DETECTED", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
     { "name": "state/UPTAKE_CONFLICT", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
     { "name": "state/UPTAKE_RED", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
-    { "name": "state/UPTAKE_REPLAYED", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" }
+    { "name": "state/UPTAKE_REPLAYED", "color": "5319e7", "description": "Where a planned release stands. The release train sets this, not a person" },
+    { "name": "dependencies", "color": "0366d6", "description": "Pull requests that update a dependency file" },
+    { "name": "javascript", "color": "168700", "description": "Pull requests that update javascript code" }
   ]
 }

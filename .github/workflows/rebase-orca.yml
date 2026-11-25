@@ -1,0 +1,155 @@
+# Replays the Orca overlay onto one Orca tag and verifies the result (OVL-02,
+# P68-10). The release train calls it with the tag detect-orca selected, or the
+# owner dispatches it; either way the caller passes the tag and its peeled
+# commit explicitly. Neither input has a default, so a re-pin edits
+# configuration.toml alone and never this file; this file carries no tag and no
+# commit, and scripts/verify-upstream-pins.mjs asserts both facts.
+#
+# The stage output names the first FAIL line scripts/rebase-orca.sh printed
+# (pin-move, fetch, seam-apply <patch>, build, typecheck:web <file>:<line>,
+# typecheck:node, typecheck:pb-build <file>:<line>, typecheck coverage, xpi cache, row <label>,
+# orcad-only start, notices, brand scan), or replayed when it succeeded. The release train's report job
+# turns a FAIL stage into one tracking issue for the tag.
+#
+# The notices output is changed when the replay rewrote the Orca section of
+# THIRD-PARTY-NOTICES.txt; the file is then uploaded as the rebase-orca-notices
+# artifact, holding exactly that file, for bump-pr-orca to carry (A-P1, the
+# plan 51-09 form).
+#
+# D-77: there is deliberately no schedule trigger. A red scheduled job with
+# nobody watching is the failure mode PITFALLS #8 warns about; the release
+# train's sweep-clock decides the weekly tick and calls this.
+#
+# This is the only job that runs Orca's code (pnpm install, build, typecheck,
+# orcad). It holds a read-only token that is not persisted; the bot job that
+# mints the App token runs only rebase-orca.sh --replay-only (P68-35).
+
+name: Rebase Orca
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Orca release tag to re-pin onto (vX.Y.Z)"
+        required: true
+        type: string
+      commit:
+        description: "The tag's peeled commit (40 hex characters)"
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        description: "Orca release tag to re-pin onto (vX.Y.Z)"
+        required: true
+        type: string
+      commit:
+        description: "The tag's peeled commit (40 hex characters)"
+        required: true
+        type: string
+    outputs:
+      stage:
+        description: "The first FAIL line the replay printed, or replayed when it succeeded"
+        value: ${{ jobs.rebase.outputs.stage }}
+      notices:
+        description: "changed when the replay rewrote THIRD-PARTY-NOTICES.txt (uploaded as rebase-orca-notices), else unchanged"
+        value: ${{ jobs.rebase.outputs.notices }}
+      notices-sha256:
+        description: "The SHA-256 of the THIRD-PARTY-NOTICES.txt uploaded as rebase-orca-notices (empty when unchanged)"
+        value: ${{ jobs.rebase.outputs.notices-sha256 }}
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    outputs:
+      stage: ${{ steps.stage.outputs.stage }}
+      notices: ${{ steps.notices.outputs.notices }}
+      notices-sha256: ${{ steps.notices.outputs.notices-sha256 }}
+    # WR-09 (plan 01-18). This job clones a third-party tree, installs its
+    # packages, builds and typechecks it, and starts its daemon; it reads and
+    # verifies, and pushes nothing. With no `permissions:` block it would
+    # inherit the repository-default GITHUB_TOKEN scope, which on many repos is
+    # write-capable, and actions/checkout leaves that credential in .git/config
+    # for the whole job. A read-only contents scope plus a checkout that does
+    # not persist the credential means the token is neither powerful nor
+    # present while the third-party tree runs. 90 minutes: Orca's install and
+    # build on a hosted runner (68-RESEARCH Pitfall 10).
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache
+          df -h
+
+      # Pinned by SHA, the same action and SHA rebase-upstream.yml uses.
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+
+      # D-18's permanent gate, run BEFORE the replay as well as inside it, so a
+      # residue already on the tree is not misread as one the replay introduced.
+      # No --extra-root: orca/ is not cloned yet, and the replay's own scan is
+      # over the tracked tree the re-pin changes.
+      - name: Scan for residual brand strings
+        run: node scripts/scan-brand-residue.mjs
+
+      - name: Replay onto the requested Orca tag
+        id: rebase
+        env:
+          REBASE_TAG: ${{ inputs.tag }}
+          REBASE_COMMIT: ${{ inputs.commit }}
+        # pipefail: without it the step takes tee's status and a failed replay reads as success.
+        run: |
+          set -o pipefail
+          nix develop .#orca --command bash scripts/rebase-orca.sh --tag "$REBASE_TAG" --commit "$REBASE_COMMIT" --stage-file "$RUNNER_TEMP/stage.txt" 2>&1 | tee "$RUNNER_TEMP/rebase.log"
+
+      # Names the stage for the release train: the line rebase-orca.sh wrote to its
+      # --stage-file after the command it judged had exited, never the first FAIL line
+      # of the log, which carries everything Orca's build and typecheck print and so
+      # can open with a line upstream wrote (ci-supply-chain-06). The line is kept to
+      # a bounded length and a character set with no backtick, so it cannot leave the
+      # code span the report job prints it in. A replay that succeeded reports
+      # replayed. Runs even on failure.
+      - name: Name the stage the replay ended at
+        id: stage
+        if: ${{ always() }}
+        env:
+          OUTCOME: ${{ steps.rebase.outcome }}
+        run: |
+          if [ "$OUTCOME" = "success" ]; then
+            echo "stage=replayed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          LINE=$(head -n1 "$RUNNER_TEMP/stage.txt" 2>/dev/null || true)
+          LINE=$(printf '%s' "$LINE" | tr -cd "A-Za-z0-9 _./:@()'*,=<>+-" | cut -c1-300)
+          case "$LINE" in "rebase-orca: FAIL -- "*) ;; *) LINE="" ;; esac
+          echo "stage=${LINE:-FAIL -- rebase-orca.sh did not complete the replay}" >> "$GITHUB_OUTPUT"
+
+      - name: Record whether the replay rewrote the notices
+        id: notices
+        run: |
+          if git diff --quiet HEAD -- THIRD-PARTY-NOTICES.txt; then
+            echo "notices=unchanged" >> "$GITHUB_OUTPUT"
+          else
+            mkdir -p "$RUNNER_TEMP/notices"
+            cp THIRD-PARTY-NOTICES.txt "$RUNNER_TEMP/notices/"
+            echo "notices=changed" >> "$GITHUB_OUTPUT"
+            echo "notices-sha256=$(sha256sum < "$RUNNER_TEMP/notices/THIRD-PARTY-NOTICES.txt" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload the rewritten notices
+        if: ${{ steps.notices.outputs.notices == 'changed' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rebase-orca-notices
+          path: ${{ runner.temp }}/notices/THIRD-PARTY-NOTICES.txt
+          retention-days: 1
+          if-no-files-found: error
+          # A re-run attempt of the same run would otherwise answer 409 on the first attempt's artifact.
+          overwrite: true

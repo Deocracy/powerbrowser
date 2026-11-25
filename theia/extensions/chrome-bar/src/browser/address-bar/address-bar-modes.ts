@@ -92,11 +92,12 @@ export class TabsAddressBarMode extends BuiltInAddressBarMode {
         const current = this.shell.mainPanel.currentTitle?.owner;
         const tabs = this.shell.getWidgets('main')
             .filter((w): w is WebTabWidget => w instanceof WebTabWidget && w.hasPage);
-        this.recent = this.recent.filter(id => tabs.some(w => w.id === id));
-        const rank = (w: WebTabWidget): number => {
-            const at = this.recent.indexOf(w.id);
-            return at < 0 ? this.recent.length + tabs.indexOf(w) : at;
-        };
+        // Each keystroke ranks every tab: one pass builds the positions the comparator reads.
+        const live = new Set(tabs.map(w => w.id));
+        this.recent = this.recent.filter(id => live.has(id));
+        const recentAt = new Map(this.recent.map((id, at): [string, number] => [id, at]));
+        const stripAt = new Map(tabs.map((w, at): [WebTabWidget, number] => [w, at]));
+        const rank = (w: WebTabWidget): number => recentAt.get(w.id) ?? this.recent.length + (stripAt.get(w) ?? -1);
         return tabs
             .filter(w => w !== current && matches(text, w.title.label, w.url))
             .sort((a, b) => rank(a) - rank(b))

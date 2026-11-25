@@ -1162,7 +1162,9 @@ const MENU_WIDGET_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widg
 const COPY_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-copy.ts';
 const APP_MENU_MODES = ['Coding', 'Browsing', 'Organising'];
 /** The stock page each stock row opens; the about: addresses are what the stock pages load. */
-const STOCK_ROW_PAGES = [['Settings', 'about:preferences'], ['Passwords', 'about:logins'], ['Add-ons', 'about:addons'], ['Help', 'about:support']];
+const COMMANDS_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-commands.ts';
+// The third field is the CHROME_BAR_COPY key of the submenu leaf that opens the page (Help became a submenu in 33).
+const STOCK_ROW_PAGES = [['Settings', 'about:preferences'], ['Passwords', 'about:logins'], ['Add-ons', 'about:addons'], ['Help', 'about:support', 'getHelpRow']];
 
 /** The raw copy template of a CHROME_BAR_COPY key (its interpolations left as ${...}). */
 function copyTemplate(copySrc, key) {
@@ -1206,14 +1208,43 @@ async function expectedAppMenu(app) {
         return copyTemplate(copy, key).replace(/\$\{[^}]+\}/g, subject);
     };
     const caption = copyTemplate(copy, 'comingSoonRow');
+    const needsTab = appMenuRowsNeedingTab(widget);
     const menuRows = rows.map(row => {
         const enabled = menu.WIRED_MENU_IDS.includes(row.menuId);
         const label = labelOf(row.menuId);
-        return { id: row.menuId, group: row.group, label: enabled ? label : caption.replace(/\$\{label\}/g, label), disabled: !enabled };
+        return { id: row.menuId, group: row.group, label: enabled ? label : caption.replace(/\$\{label\}/g, label), disabled: !enabled, needsTab: enabled && needsTab.has(row.menuId) };
     });
     // The drawn sequence: a separator wherever the group changes, none before the first row or after the last.
     const sequence = menuRows.flatMap((row, i) => (i > 0 && menuRows[i - 1].group !== row.group ? ['|', row.label] : [row.label]));
     return { rows: menuRows, sequence, separators: new Set(rows.map(row => row.group)).size - 1 };
+}
+
+/**
+ * WINDOWS 40: the app-menu rows whose command is enabled only with a current web tab (MENU-03, 33), derived from
+ * APP_MENU_COMMANDS in the widget and each command's isEnabled in chrome-bar-commands.ts. An isEnabled of any
+ * other shape is drift this check cannot read, so it throws rather than guess.
+ */
+function appMenuRowsNeedingTab(widget) {
+    const commandsSrc = readFileSync(join(REPO_ROOT, COMMANDS_REL), 'utf8');
+    const table = /const APP_MENU_COMMANDS[^=]*= Object\.freeze\(\{([\s\S]*?)\}\);/.exec(widget)?.[1];
+    if (!table) {
+        throw new Error(`${BROKEN} no APP_MENU_COMMANDS table in ${MENU_WIDGET_REL}`);
+    }
+    const out = new Set();
+    for (const [, menuId, idConst] of table.matchAll(/'([a-z-]+)': (\w+),/g)) {
+        const command = new RegExp(`export const (\\w+): Command = \\{[^}]*\\bid: ${idConst}\\b`).exec(commandsSrc)?.[1];
+        const block = command && new RegExp(`registerCommand\\(${command}, \\{([\\s\\S]*?)\\n\\s*\\}\\);`).exec(commandsSrc)?.[1];
+        if (!block) {
+            throw new Error(`${BROKEN} no registerCommand for ${idConst} (menu row ${menuId}) in ${COMMANDS_REL}`);
+        }
+        const isEnabled = /isEnabled: ([^\n]*),\n/.exec(block)?.[1];
+        if (isEnabled === '() => !!currentWebTab()') {
+            out.add(menuId);
+        } else if (isEnabled !== undefined) {
+            throw new Error(`${BROKEN} menu row ${menuId}'s command has an isEnabled this check cannot read: ${isEnabled}`);
+        }
+    }
+    return out;
 }
 
 /** The visible application menu (the last shown one: a closed menu may stay in the DOM). */
@@ -1233,8 +1264,10 @@ const hamburgerOpen = app => app.evaluate(`(() => { const b = document.querySele
 const selectMode = (app, mode) => app.evaluate(`(() => { const b = [...document.querySelectorAll('.pb-chrome-bar-segment')].find(x => x.textContent.trim() === ${JSON.stringify(mode)}); if (!b) return false; b.click(); return true; })()`);
 const modeActive = (app, mode) => app.evaluate(`(() => { const b = [...document.querySelectorAll('.pb-chrome-bar-segment')].find(x => x.textContent.trim() === ${JSON.stringify(mode)}); return !!b && b.getAttribute('aria-pressed') === 'true'; })()`);
 /** Activates a row the way a pointer does: move, then mouse-up on the row. A disabled row ignores it. */
-const clickMenuRow = (app, label) => app.evaluate(`(() => {
-    const menu = ${VISIBLE_APP_MENU};
+/** The last shown menu of any kind: a submenu flyout is its own .lm-Menu without the app-menu class. */
+const ANY_VISIBLE_MENU = `[...document.querySelectorAll('.lm-Menu')].filter(m => m.getClientRects().length > 0).pop()`;
+const clickMenuRow = (app, label, menuExpr = VISIBLE_APP_MENU) => app.evaluate(`(() => {
+    const menu = ${menuExpr};
     const item = menu && [...menu.querySelectorAll('.lm-Menu-item')].find(i => i.querySelector('.lm-Menu-itemLabel')?.textContent.trim() === ${JSON.stringify(label)});
     if (!item) return 'no-row';
     const r = item.getBoundingClientRect();
@@ -1290,7 +1323,6 @@ async function appMenu(ctx) {
         }
     }
     const wantLabels = want.rows.map(row => row.label);
-    const wantDisabled = want.rows.map(row => row.disabled);
     // 1. The hamburger in every mode, and the rows, their disabled state and the separators.
     for (const mode of APP_MENU_MODES) {
         if (await selectMode(app, mode) !== true) {
@@ -1311,6 +1343,8 @@ async function appMenu(ctx) {
         if (JSON.stringify(labels) !== JSON.stringify(wantLabels)) {
             fail(`the ${mode} menu rows are ${JSON.stringify(labels)}, want ${JSON.stringify(wantLabels)} (Firefox order, this phase's rows)`);
         }
+        // Organising holds the main area, so no web tab is current there and the tab-needing rows dim (MENU-03).
+        const wantDisabled = want.rows.map(row => row.disabled || (mode === 'Organising' && row.needsTab));
         const disabled = menu.rows.map(row => row.disabled);
         if (JSON.stringify(disabled) !== JSON.stringify(wantDisabled)) {
             fail(`the ${mode} menu disabled rows are ${JSON.stringify(disabled)}, want ${JSON.stringify(wantDisabled)}`);
@@ -1322,7 +1356,8 @@ async function appMenu(ctx) {
         await waitFor(() => app.evaluate(`!(${VISIBLE_APP_MENU})`), v => v === true, 3000);
     }
     // 2. Each stock row: no stock window before, then one stock window with one tab on the page.
-    for (const [label, url] of STOCK_ROW_PAGES) {
+    const copySrc = readFileSync(join(REPO_ROOT, COPY_REL), 'utf8');
+    for (const [label, url, leafKey] of STOCK_ROW_PAGES) {
         if (await closeStockWindows(app) !== true) {
             return fail(`${BROKEN} the stock windows could not be closed before the ${label} row`);
         }
@@ -1332,6 +1367,14 @@ async function appMenu(ctx) {
         await waitFor(() => readAppMenu(app), r => r.present && r.rows.length > 0, 6000);
         if (await clickMenuRow(app, label) !== 'clicked') {
             return fail(`${BROKEN} the ${label} row is not in the open menu`);
+        }
+        if (leafKey) {
+            const leaf = copyTemplate(copySrc, leafKey);
+            if (await waitFor(() => clickMenuRow(app, leaf, ANY_VISIBLE_MENU), r => r === 'clicked', 3000) !== 'clicked') {
+                fail(`the ${label} row opened no submenu with its ${leaf} row`);
+                await closeMenu(app);
+                continue;
+            }
         }
         const shown = await waitFor(() => stockWindows(app), w => w.some(tabs => tabs.includes(url)), 10000);
         if (!shown.some(tabs => tabs.includes(url))) {

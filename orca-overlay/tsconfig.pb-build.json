@@ -1,0 +1,19 @@
+// OVL-02: the third typecheck program, for the overlay files at Orca's root that its two programs
+// (config/tsconfig.tc.web.json, config/tsconfig.node.json) do not include: the pane and browser-host
+// Vite configs and the PostCSS pass they import. Vite strips their types, so without this program a
+// re-pin that moves a Vite or postcss type would pass the build. Kept beside files/, never copied
+// into orca/; rebase-orca.sh runs it from orca/ as typecheck:pb-build and its coverage stage reads
+// its file list. The globs are the naming rule for a root overlay file: vite.pb-*.config.ts, pb-*.mjs.
+{
+  "extends": "../orca/config/tsconfig.node.json",
+  "include": ["../orca/vite.pb-*.config.ts", "../orca/pb-*.mjs"],
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": true,
+    // tsconfig.node.json names electron-vite/node, which resolves only from orca/config/.
+    "types": ["node"],
+    "typeRoots": ["../orca/node_modules/@types"]
+  }
+}

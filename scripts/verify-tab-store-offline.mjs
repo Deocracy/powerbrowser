@@ -28,6 +28,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSyn
 import { join } from 'node:path';
 import { REPO_ROOT, buildStore, columnsOf, newStage, readStore, schemaHead, setUserVersion, tamperBodyPage } from './lib/tab-store-fixtures.mjs';
 import { LIKE_SQL_REGEX, SessionStore, closeAll, env, freshApi, report } from './lib/tab-store-fakes.mjs';
+import { SKIP_EXIT, verdictExit } from './lib/skip-verdict.mjs';
 
 const NAME = 'verify-tab-store-offline';
 const API = join(REPO_ROOT, 'powerbrowser/shell/PowerBrowserAPI.sys.mjs');
@@ -39,6 +40,7 @@ const KEY = 'powerbrowser-tab-key';
 
 const failures = [];
 const notes = [];
+const skips = [];
 const expect = (ok, message) => {
     if (!ok) {
         failures.push(message);
@@ -96,7 +98,8 @@ try {
         expect(m && m[1] === LIKE_SQL_REGEX.source && m[2] === LIKE_SQL_REGEX.flags,
             `the pinned LIKE rule ${LIKE_SQL_REGEX} is not upstream Sqlite.sys.mjs's likeSqlRegex (${m ? `/${m[1]}/${m[2]}` : 'not found'})`);
     } else {
-        notes.push('upstream/ is absent, so the pinned LIKE rule was not compared with Sqlite.sys.mjs');
+        // A clause not run for an absent input: the run is a SKIP (SKIP-PROTOCOL.md rule 2).
+        skips.push('upstream/ is absent, so the pinned LIKE rule was not compared with Sqlite.sys.mjs. Next step: run scripts/fetch-upstream.sh');
     }
 
     // ---- A. migration from every shipped version (NG-015's own expectations) ------
@@ -262,7 +265,11 @@ try {
         await api.ensureTabStore();
         const makeWindow = priv => {
             const listeners = {};
-            return { private: priv, listeners, gBrowser: { tabs: [], tabContainer: { addEventListener: (n, f) => { listeners[n] = f; }, removeEventListener() {} } } };
+            // windowListeners holds what the triggers add on the window itself (its unload); `removed` counts the
+            // tab container's removeEventListener calls, which is how the stop function is seen to reach it or not.
+            const win = { private: priv, listeners, windowListeners: {}, removed: 0, addEventListener: (n, f) => { win.windowListeners[n] = f; }, removeEventListener() {} };
+            win.gBrowser = { tabs: [], tabContainer: { addEventListener: (n, f) => { listeners[n] = f; }, removeEventListener: () => { win.removed += 1; } } };
+            return win;
         };
         const makeTab = (win, url) => {
             const tab = { linkedBrowser: { currentURI: { spec: url } }, ownerDocument: { defaultView: win }, label: url, closing: false };
@@ -330,6 +337,17 @@ try {
             await sleep(20);
             expect((await rows()).find(r => r.uri === dupOwn)?.closed_at !== null, 'NG-005: TabClose did not keep the row as closed history');
             expect(api.findStockTabBrowser(k1)?.tab === moved, 'findStockTabBrowser did not find the tab by its key');
+            // A closed stock window's tab container leaves the attach list at its unload, so it is not held until quit:
+            // the stop function reaches the container of the window still open and not the closed one's.
+            const gone = makeWindow(false);
+            const kept = makeWindow(false);
+            env.windows = [gone, kept];
+            const stopBoth = api.startTabStoreTriggers();
+            await sleep(10);
+            expect(typeof gone.windowListeners.unload === 'function', 'the triggers add no unload listener to a stock window, so a closed window stays in the attach list');
+            gone.windowListeners.unload?.();
+            stopBoth();
+            expect(gone.removed === 0 && kept.removed > 0, `a closed stock window's tab container was still held when the triggers stopped (closed window: ${gone.removed} removals, open window: ${kept.removed})`);
             await closeAll();
         } finally {
             for (const stop of stopTabStoreTriggers.splice(0)) {
@@ -399,4 +417,6 @@ if (failures.length) {
     failures.forEach(f => report(`  ${f}`));
     process.exit(1);
 }
+// FAIL wins; a clause not run makes the run exit 77 with one SKIP line printed last (SKIP-PROTOCOL.md).
+if (verdictExit(NAME, failures, skips) === SKIP_EXIT) process.exit(SKIP_EXIT);
 console.log(`${NAME}: PASS -- the writer's migration, key rule, lifecycle, quarantine and shutdown close hold offline under Sqlite.sys.mjs's rules`);

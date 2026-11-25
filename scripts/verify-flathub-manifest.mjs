@@ -69,7 +69,9 @@ const RUNTIME_REF = 'org.freedesktop.Platform';
 const SDK_REF = 'org.freedesktop.Sdk';
 // Policy allow-list for the sandbox (the one place a hand-kept list is right): X11 only as a fallback to Wayland, the
 // network for the browser, and the dri device for GL. Anything else is a grant someone has to add here on purpose.
-const SANDBOX_ALLOW = ['--share=ipc', '--socket=fallback-x11', '--socket=wayland', '--socket=pulseaudio', '--share=network', '--device=dri'];
+// --filesystem=home: Orca worktrees, agent CLIs and their credentials live under HOME (2026-11-04 platforms decision,
+// P68-07). It exposes HOME only, not host binaries under /usr; --filesystem=host stays red.
+const SANDBOX_ALLOW = ['--share=ipc', '--socket=fallback-x11', '--socket=wayland', '--socket=pulseaudio', '--share=network', '--device=dri', '--filesystem=home'];
 const BRANCH_RE = /^\d{2}\.\d{2}$/;
 const VERIFY_PLACEHOLDER = '@FLATHUB_VERIFICATION_TOKEN@';
 
@@ -382,6 +384,10 @@ function selfTest() {
         {
             name: 'host filesystem granted', expect: 'grants --filesystem=host',
             overrides: withManifest(d => { d['finish-args'].push('--filesystem=host'); }),
+        },
+        {
+            name: 'home filesystem grant removed', expect: 'lacks --filesystem=home',
+            overrides: withManifest(d => { d['finish-args'] = d['finish-args'].filter(a => a !== '--filesystem=home'); }),
         },
         {
             name: 'session bus name talk granted', expect: 'grants --talk-name=org.freedesktop.Flatpak',

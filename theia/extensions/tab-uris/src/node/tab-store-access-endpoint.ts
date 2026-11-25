@@ -228,6 +228,9 @@ export class TabStoreAccessEndpoint implements BackendApplicationContribution {
         } catch {
             return this.json(res, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'invalid JSON' } });
         }
+        if (!msg || typeof msg !== 'object') {
+            return this.json(res, { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'invalid request' } });
+        }
         const id = msg.id === undefined ? null : msg.id;
         try {
             const result = await this.dispatch(String(msg.method ?? ''), (msg.params ?? {}) as Args);
@@ -321,11 +324,7 @@ export class TabStoreAccessEndpoint implements BackendApplicationContribution {
                         msg[field] = args[field];
                     }
                 }
-                const reply = await this.relay.relay(msg);
-                if (!reply.ok) {
-                    throw new Error(reply.message ?? `${op} failed (${reply.reason ?? 'store'})`);
-                }
-                return reply;
+                return this.chromeReply(msg);
             }
             default:
                 throw new Error(`unknown tool ${name}`);
@@ -343,10 +342,6 @@ export class TabStoreAccessEndpoint implements BackendApplicationContribution {
 
     /** One chrome read through a connected window; the reply field, or null. */
     protected async chrome(msg: StoreMessage, field: string): Promise<unknown> {
-        const reply = await this.relay.relay(msg);
-        if (!reply.ok) {
-            throw new Error(reply.message ?? `${msg.kind} failed (${reply.reason ?? 'store'})`);
-        }
-        return reply[field] ?? null;
+        return (await this.chromeReply(msg))[field] ?? null;
     }
 }

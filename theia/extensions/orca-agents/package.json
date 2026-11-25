@@ -1,0 +1,25 @@
+{
+  "private": true,
+  "name": "@powerbrowser/orca-agents",
+  "version": "0.1.0",
+  "license": "MIT",
+  "dependencies": {
+    "@powerbrowser/token-gate": "0.1.0",
+    "@theia/core": "1.76.0"
+  },
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/orca-agents-frontend-module",
+      "backend": "lib/node/orca-agents-backend-module"
+    }
+  ],
+  "files": [
+    "lib",
+    "src",
+    "bin"
+  ],
+  "scripts": {
+    "clean": "rm -rf lib *.tsbuildinfo",
+    "build": "tsc -b"
+  }
+}

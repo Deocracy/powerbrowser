@@ -79,6 +79,25 @@ jobs:
       - name: Fetch the pinned upstream and apply patches/
         run: nix develop .#theia --command bash -c 'bash scripts/fetch-upstream.sh && bash scripts/apply-patches.sh'
 
+      # Audit harness-driver-03: several quick rows derive their expectation from the pinned
+      # third-party checkout orca/ and SKIP those clauses without it, so a fork PR that broke one of
+      # them went green. The fetch script clones the tag named in generated/upstream-pins.env and
+      # refuses any HEAD but the pinned commit: a pinned, read-only third-party tree like upstream/.
+      # It runs after generate (the pins fragment) and before the table; ci-fetches checks that
+      # every scripts/fetch-*.sh runs here before the table.
+      - name: Fetch the second pinned third-party checkout
+        run: nix develop .#theia --command bash scripts/fetch-orca.sh
+
+      # Audit harness-other-05 (handed over by lane H8): the bundled add-on legs of the quick rows
+      # (verify-bundled-xpi, licence-allowlist) read the git-ignored cache .mozbuild/bundled-xpi/ and
+      # exit 77 (SKIP) without it. The packaging scripts' own stager fills it: each XPI pinned in
+      # powerbrowser/packaging/bundled-xpi.json is downloaded and refused unless its SHA-256 equals
+      # the pin. Nothing downloaded is executed, and the step holds no secret; the job's read-only
+      # token stays unpersisted. The scratch distribution folder is discarded; only the cache stays,
+      # as scripts/rebase-orca.sh does for its replay. ci-fetches checks this step is here.
+      - name: Stage the pinned bundled add-on cache
+        run: dist="$(mktemp -d)" && bash powerbrowser/packaging/stage-bundled-xpi.sh "$dist" && rm -rf "$dist"
+
       - name: Install and build the Theia workspace
         run: nix develop .#theia --command bash -c 'cd theia && yarn install --ignore-scripts --frozen-lockfile && { if [ -d node_modules/drivelist ]; then (cd node_modules/drivelist && node-gyp rebuild); else echo "theia install - node_modules/drivelist is absent, the pinned workspace changed its native deps" >&2; exit 1; fi; } && yarn build'
 
@@ -89,7 +108,11 @@ jobs:
       # scan-brand-residue, theia-branding, theia-endpoints, telemetry,
       # extension-pins, verify-upstream-pins) plus every other honestly
       # --quick check the registry carries.
+      # The hosted job's temp folder is under the runner's home, which the scratch-HOME rule of the live
+      # library treats as the real home; a temp folder outside it keeps the fixture homes usable.
       - name: Run the static verification table
+        env:
+          TMPDIR: /tmp
         run: nix develop .#theia --command scripts/verify-platform.sh --quick
 
       # DELIBERATELY OUT OF THIS WORKFLOW -- runtime-behind-build rows CI

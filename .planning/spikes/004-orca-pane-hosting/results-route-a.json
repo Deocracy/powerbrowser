@@ -1,0 +1,450 @@
+{
+  "route": "a",
+  "measure": "all",
+  "command": "PB_FIREFOX_BIN=/home/chris/orca/workspaces/Power-Browser/v1.7-Orca-integration/objdir/dist/bin/powerbrowser flock /home/chris/coding/Power-Browser/.git/pb-live.lock node .planning/spikes/004-orca-pane-hosting/measure.mjs --route a --measure all",
+  "startedAt": "2026-11-10T06:47:09.293Z",
+  "orcaVersion": "1.4.248",
+  "nodeVersion": "24.19.0",
+  "orcadNodeVersion": "24.19.0",
+  "orcadEndpoint": "ws://127.0.0.1:<port>",
+  "theiaBuild": "/home/chris/orca/workspaces/Power-Browser/p61-01/theia/applications/browser/lib/backend/main.js",
+  "theiaOrigin": "http://127.0.0.1:<port>",
+  "cssControl": {
+    "plantedGlobalRules": 1,
+    "counterDelta": 1,
+    "restoredAfterRemoval": true,
+    "theiaDocumentBefore": {
+      "global": 54,
+      "total": 7455,
+      "sheets": 8,
+      "unreadable": 0
+    }
+  },
+  "reactCopies": 1,
+  "reactVersions": {
+    "theia": "19.2.8",
+    "bundle": "19.2.8"
+  },
+  "renderedInTheiaRoot": true,
+  "routeAForm": "runtime ReactWidget subclass in the Theia frame; React from the lane Theia build (window.__pbReact); no scratch extension",
+  "widgetInMainArea": true,
+  "xterms": 1,
+  "paneSize": {
+    "w": 1280,
+    "h": 695
+  },
+  "markerCount": 2,
+  "mounted": true,
+  "ws": "works",
+  "deviceKeySupport": "persistent",
+  "paneDocumentSecureContext": true,
+  "theia": {
+    "secureContext": true,
+    "cspHeader": null,
+    "cspMeta": null
+  },
+  "connectSrcRefusal": "none observed",
+  "observeChannel": "store",
+  "observeTrigger": "the store new-terminal action (createNewTerminalTab) in the hosting client",
+  "observeLatencyMs": 91,
+  "observeToAddWidgetMs": 31,
+  "observeWithinOneSecond": true,
+  "observedPaneMounted": true,
+  "memory": {
+    "method": "ChromeUtils.requestProcInfo() through app.evaluateIn(app.chrome, ...), 5 s after each pane settled; sum of the parent and the children whose windows are on the Theia or orcad origin",
+    "samples": [
+      {
+        "label": "before the first pane",
+        "relevantBytes": 546918400,
+        "totalBytes": 671096832,
+        "processes": 9,
+        "rows": [
+          {
+            "type": "parent",
+            "memory": 163053568,
+            "origins": []
+          },
+          {
+            "type": "web",
+            "memory": 383864832,
+            "origins": [
+              "theia"
+            ]
+          }
+        ]
+      },
+      {
+        "label": "after pane 1",
+        "relevantBytes": 659316736,
+        "totalBytes": 783503360,
+        "processes": 9,
+        "rows": [
+          {
+            "type": "parent",
+            "memory": 157147136,
+            "origins": []
+          },
+          {
+            "type": "web",
+            "memory": 502169600,
+            "origins": [
+              "theia"
+            ]
+          }
+        ]
+      },
+      {
+        "label": "after pane 2",
+        "relevantBytes": 669913088,
+        "totalBytes": 794099712,
+        "processes": 9,
+        "rows": [
+          {
+            "type": "parent",
+            "memory": 157192192,
+            "origins": []
+          },
+          {
+            "type": "web",
+            "memory": 512720896,
+            "origins": [
+              "theia"
+            ]
+          }
+        ]
+      },
+      {
+        "label": "after pane 3",
+        "relevantBytes": 675966976,
+        "totalBytes": 800153600,
+        "processes": 9,
+        "rows": [
+          {
+            "type": "parent",
+            "memory": 157671424,
+            "origins": []
+          },
+          {
+            "type": "web",
+            "memory": 518295552,
+            "origins": [
+              "theia"
+            ]
+          }
+        ]
+      }
+    ],
+    "firstPaneDeltaBytes": 112398336,
+    "totalDeltaBytes": 129048576,
+    "perPaneDeltaBytes": 43016192,
+    "laterPaneDeltaBytes": 8325120,
+    "lastPaneDeltaBytes": 6053888,
+    "totalAllProcessesDeltaBytes": 129056768,
+    "notMeasured": "the Theia backend (Node) and orcad are not Gecko processes and are outside this number"
+  },
+  "memoryPerPaneBytes": 43016192,
+  "cssLeakOut": {
+    "globalRulesAdded": 845,
+    "rulesAdded": 6319,
+    "theiaDocumentCounterDelta": 78,
+    "unreadableSheetsAdded": 1,
+    "orcaSheet": {
+      "global": 845,
+      "total": 6319,
+      "sheets": 1,
+      "unreadable": 0,
+      "bytes": 3770970
+    },
+    "computedStyleDiffs": 84,
+    "changed": [
+      {
+        "key": "html|line-height",
+        "before": "normal",
+        "after": "24px"
+      },
+      {
+        "key": "html|border-top-style",
+        "before": "none",
+        "after": "solid"
+      },
+      {
+        "key": "html|border-top-color",
+        "before": "rgb(0, 0, 0)",
+        "after": "rgb(229, 229, 229)"
+      },
+      {
+        "key": "html|box-sizing",
+        "before": "content-box",
+        "after": "border-box"
+      },
+      {
+        "key": "body|line-height",
+        "before": "normal",
+        "after": "24px"
+      },
+      {
+        "key": "body|letter-spacing",
+        "before": "normal",
+        "after": "0.16px"
+      },
+      {
+        "key": "body|box-sizing",
+        "before": "content-box",
+        "after": "border-box"
+      },
+      {
+        "key": "button|font-family",
+        "before": "sans-serif",
+        "after": "system-ui, Ubuntu, Droid Sans, sans-serif"
+      },
+      {
+        "key": "button|font-size",
+        "before": "13.3333px",
+        "after": "16px"
+      },
+      {
+        "key": "button|line-height",
+        "before": "normal",
+        "after": "24px"
+      },
+      {
+        "key": "button|letter-spacing",
+        "before": "normal",
+        "after": "0.16px"
+      },
+      {
+        "key": "button|color",
+        "before": "rgb(0, 0, 0)",
+        "after": "rgb(204, 204, 204)"
+      },
+      {
+        "key": "button|background-color",
+        "before": "rgb(233, 233, 237)",
+        "after": "rgba(0, 0, 0, 0)"
+      },
+      {
+        "key": "button|padding-left",
+        "before": "4px",
+        "after": "0px"
+      },
+      {
+        "key": "button|border-top-width",
+        "before": "2px",
+        "after": "0px"
+      },
+      {
+        "key": "button|border-top-style",
+        "before": "outset",
+        "after": "solid"
+      },
+      {
+        "key": "button|border-top-color",
+        "before": "rgb(143, 143, 157)",
+        "after": "rgb(229, 229, 229)"
+      },
+      {
+        "key": "button|cursor",
+        "before": "default",
+        "after": "pointer"
+      },
+      {
+        "key": "input|font-family",
+        "before": "sans-serif",
+        "after": "system-ui, Ubuntu, Droid Sans, sans-serif"
+      },
+      {
+        "key": "input|font-size",
+        "before": "13.3333px",
+        "after": "16px"
+      },
+      {
+        "key": "input|line-height",
+        "before": "normal",
+        "after": "24px"
+      },
+      {
+        "key": "input|letter-spacing",
+        "before": "normal",
+        "after": "0.16px"
+      },
+      {
+        "key": "input|color",
+        "before": "rgb(0, 0, 0)",
+        "after": "rgb(204, 204, 204)"
+      },
+      {
+        "key": "input|background-color",
+        "before": "rgb(255, 255, 255)",
+        "after": "rgba(0, 0, 0, 0)"
+      },
+      {
+        "key": "input|padding-left",
+        "before": "2px",
+        "after": "0px"
+      },
+      {
+        "key": "input|border-top-width",
+        "before": "2px",
+        "after": "0px"
+      },
+      {
+        "key": "input|border-top-style",
+        "before": "inset",
+        "after": "solid"
+      },
+      {
+        "key": "input|border-top-color",
+        "before": "rgb(143, 143, 157)",
+        "after": "rgb(229, 229, 229)"
+      },
+      {
+        "key": "input|box-sizing",
+        "before": "content-box",
+        "after": "border-box"
+      },
+      {
+        "key": "a|line-height",
+        "before": "normal",
+        "after": "24px"
+      }
+    ]
+  },
+  "cssLeakIn": {
+    "computedStyleDiffs": 24,
+    "changed": [
+      {
+        "key": "root|font-family",
+        "before": "\"Geist\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+        "after": "system-ui, Ubuntu, Droid Sans, sans-serif"
+      },
+      {
+        "key": "root|font-size",
+        "before": "16px",
+        "after": "13px"
+      },
+      {
+        "key": "root|line-height",
+        "before": "24px",
+        "after": "19.5px"
+      },
+      {
+        "key": "root|color",
+        "before": "rgb(10, 10, 10)",
+        "after": "rgb(204, 204, 204)"
+      },
+      {
+        "key": "pane|font-family",
+        "before": "\"Geist\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+        "after": "system-ui, Ubuntu, Droid Sans, sans-serif"
+      },
+      {
+        "key": "pane|font-size",
+        "before": "16px",
+        "after": "13px"
+      },
+      {
+        "key": "pane|line-height",
+        "before": "24px",
+        "after": "19.5px"
+      },
+      {
+        "key": "pane|color",
+        "before": "rgb(10, 10, 10)",
+        "after": "rgb(204, 204, 204)"
+      },
+      {
+        "key": "xterm|font-family",
+        "before": "\"Geist\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+        "after": "system-ui, Ubuntu, Droid Sans, sans-serif"
+      },
+      {
+        "key": "xterm|font-size",
+        "before": "16px",
+        "after": "13px"
+      },
+      {
+        "key": "xterm|line-height",
+        "before": "24px",
+        "after": "19.5px"
+      },
+      {
+        "key": "xterm|color",
+        "before": "rgb(10, 10, 10)",
+        "after": "rgb(204, 204, 204)"
+      },
+      {
+        "key": "viewport|font-family",
+        "before": "\"Geist\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+        "after": "system-ui, Ubuntu, Droid Sans, sans-serif"
+      },
+      {
+        "key": "viewport|font-size",
+        "before": "16px",
+        "after": "13px"
+      },
+      {
+        "key": "viewport|line-height",
+        "before": "24px",
+        "after": "19.5px"
+      },
+      {
+        "key": "viewport|color",
+        "before": "rgb(10, 10, 10)",
+        "after": "rgb(204, 204, 204)"
+      },
+      {
+        "key": "helper|font-family",
+        "before": "\"Geist\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+        "after": "system-ui, Ubuntu, Droid Sans, sans-serif"
+      },
+      {
+        "key": "helper|font-size",
+        "before": "16px",
+        "after": "13px"
+      },
+      {
+        "key": "helper|color",
+        "before": "rgb(10, 10, 10)",
+        "after": "rgb(204, 204, 204)"
+      },
+      {
+        "key": "helper|border-top-color",
+        "before": "rgb(10, 10, 10)",
+        "after": "rgb(204, 204, 204)"
+      },
+      {
+        "key": "surface|font-family",
+        "before": "\"Geist\", -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
+        "after": "system-ui, Ubuntu, Droid Sans, sans-serif"
+      },
+      {
+        "key": "surface|font-size",
+        "before": "16px",
+        "after": "13px"
+      },
+      {
+        "key": "surface|line-height",
+        "before": "24px",
+        "after": "19.5px"
+      },
+      {
+        "key": "surface|color",
+        "before": "rgb(10, 10, 10)",
+        "after": "rgb(204, 204, 204)"
+      }
+    ],
+    "comparedProperties": 144,
+    "controlDelta": 3,
+    "reference": "the same tab on a standalone pane page in a PB web tab"
+  },
+  "observeLatencyCliMs": null,
+  "cliCreateBecameTab": false,
+  "secondClientSeesTab": true,
+  "closeLuminoOnlyLeavesOrcaTab": true,
+  "closeStaysClosed": true,
+  "closeCall": "store close action closeTerminalTab(tabId) in the Theia document (PbPane.closeTab)",
+  "closeObservedByChannel": true,
+  "orcadSurvivors": 0,
+  "finishedAt": "2026-11-10T06:48:04.190Z",
+  "verdict": "PASS"
+}

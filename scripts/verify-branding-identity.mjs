@@ -119,6 +119,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { resolveConfig } from './generate.mjs';
+import { liveEnv } from './lib/firefox-bidi.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..');
@@ -400,7 +401,7 @@ async function readRuntimeIdentity(binPath, { timeoutMs = 30000 } = {}) {
     const profileDir = await mkdtemp(join(tmpdir(), 'powerbrowser-verify-identity-'));
     let child;
     try {
-        child = spawn(binPath, ['--headless', '--profile', profileDir], { stdio: ['ignore', 'pipe', 'pipe'] });
+        child = spawn(binPath, ['--headless', '--profile', profileDir], { env: liveEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
         return await new Promise((resolve, reject) => {
             let buf = '';
             let settled = false;

@@ -2,10 +2,11 @@ import * as React from '@theia/core/shared/react';
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import { ReactWidget } from '@theia/core/lib/browser/widgets/react-widget';
 import { ApplicationServer } from '@theia/core/lib/common/application-protocol';
-import { WindowService } from '@theia/core/lib/browser/window/window-service';
+import { CommandService, MessageService } from '@theia/core/lib/common';
 import { FrontendApplicationConfigProvider } from '@theia/core/lib/browser/frontend-application-config-provider';
 import { powerBrowserMarkInline, inlineMarkFromSvg } from './powerbrowser-mark';
 import { readBrandingConfig } from './powerbrowser-branding-config';
+import { OPEN_BROWSER_WINDOW_ID } from './powerbrowser-report-bug-contribution';
 
 // D-33: `@powerbrowser/branding` ships its own welcome widget rather than
 // subclassing `@theia/getting-started`'s `GettingStartedWidget` (D-24).
@@ -34,14 +35,20 @@ export const POWERBROWSER_REPO_URL = 'https://powerbrowser.org/';
 // scripts/verify-branding-preflight.mjs asserts from the inventory value.
 const FALLBACK_DISPLAY_NAME = 'PowerBrowser';
 
+// Shown when the stock-window opener rejects; shared with the About dialog's link.
+export const OPEN_LINK_FAILED_COPY = 'PowerBrowser could not open the link because the browser did not answer. Choose the link again.';
+
 @injectable()
 export class PowerBrowserWelcomeWidget extends ReactWidget {
 
     @inject(ApplicationServer)
     protected readonly appServer: ApplicationServer;
 
-    @inject(WindowService)
-    protected readonly windowService: WindowService;
+    @inject(CommandService)
+    protected readonly commands: CommandService;
+
+    @inject(MessageService)
+    protected readonly messages: MessageService;
 
     protected version: string | undefined;
 
@@ -71,7 +78,10 @@ export class PowerBrowserWelcomeWidget extends ReactWidget {
 
     protected openRepo = (e: React.SyntheticEvent): void => {
         e.preventDefault();
-        this.windowService.openNewWindow(this.repoUrl, { external: true });
+        // The stock-window opener, not window.open: from the Theia frame window.open opens a new OS window per click.
+        this.commands.executeCommand(OPEN_BROWSER_WINDOW_ID, this.repoUrl).catch(() => {
+            this.messages.error(OPEN_LINK_FAILED_COPY);
+        });
     };
 
     // GEN-05 (04-01): the welcome heading is the RUNTIME application name --
@@ -111,8 +121,14 @@ export class PowerBrowserWelcomeWidget extends ReactWidget {
 
     // Per CONTEXT.md's discretion leaning: product name, version, and one
     // repo link only -- no invented marketing copy or tagline.
+    // The items sit in Theia's own `gs-content-container`, as Theia's
+    // getting-started widget nests its content: since the 1.76 re-pin,
+    // `@theia/ai-ide` brings `@theia/getting-started`'s `.gs-container` rule
+    // (flex column, space-between, full height), which spread four direct
+    // children over the whole main area (found 2026-11-18; checked by
+    // first-boot-surface's welcome layout clause).
     protected render(): React.ReactNode {
-        return <div className='gs-container'>
+        return <div className='gs-container'><div className='gs-content-container'>
             {/* INLINE, not an <img>. The mark inherits the Theia theme's
                 foreground through currentColor, and an <img> is a separate
                 document that inherits nothing -- which is how the OS-driven
@@ -138,6 +154,6 @@ export class PowerBrowserWelcomeWidget extends ReactWidget {
             <p>
                 <a href={this.repoUrl} onClick={this.openRepo}>{this.repoUrl}</a>
             </p>
-        </div>;
+        </div></div>;
     }
 }

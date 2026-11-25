@@ -1,0 +1,82 @@
+{
+  "$comment": "P60-R1 (OVL-04, ROADMAP Phase 60 SC3): the third-party licence allow-list. It has exactly one consumer, scripts/verify-licence-allowlist.mjs (registry rows licence-allowlist and licence-allowlist-self-test). RULE: one row per tree PowerBrowser builds from, a tree being a directory that a tracked scripts/fetch-<name>.sh materialises; the check derives that set from git ls-files and compares it with these rows as a set, both ways. FAIL-CLOSED RULE: a fetched tree with no row, a row with no fetch script, a row whose spdx is not in allowed_spdx, an allowed_spdx entry that is empty, NONE, UNLICENSED or SEE LICENSE..., or a tree whose licence file digest differs from its row is a FAILURE; only an absent tree is a SKIP, of that row alone. Runtime-installed proprietary extensions (the Claude Code extension, installed from Open VSX by the user) are deliberately NOT rows: PowerBrowser never redistributes them and no fetch script materialises them. Per-row keys: path, source, fetch_script, pinned_by[] (the configuration.toml keys that fix the tree's revision), spdx, holder, licence_file, licence_file_sha256, reason (mandatory, citing file:line), and optional licence_surface_note. Scope: a tree row covers the tree's own root licence. PER-PACKAGE RULE (Phase 68, P68-24, P68-25): every package the Orca bundles ship (derived by scripts/lib/orca-shipped-packages.mjs from the orcad, web and mobile-web bundles) is checked separately from allowed_spdx: it is red when its licence field is empty, NONE, UNLICENSED or SEE LICENSE..., when it has no licence field and no licence file, or when no OR-disjunct of its SPDX expression (every AND-conjunct) is in allowed_package_spdx, unless a package_exceptions or package_rulings row names it. Row kinds: package_exceptions (a shipped package with no licence field; keys package, licence_field, licence_file, licence_first_line, ruling, reason; red when the package no longer ships or its licence file's first line changed) and package_rulings (an owner ruling on one package; keys package, version_seen, ruling, status, decided, marker, licence_file, licence_first_line, evidence, windows_id, reason, and for status extension also extension and terms_check). Statuses: pending (ruling open; the package must ship; prints PENDING RULING), ship (must ship with the recorded licence first line), exclude and runtime-fetch (red while the package still ships), extension (red while the package still ships, red unless the extension folder's package.json lists the package at an exact version, and PENDING OWNER CHECK while terms_check is pending). --rulings prints every open owner item (allowed_package_spdx_ruling pending, a pending ruling row, a pending terms_check) and exits 1 while any is open; it needs no built orca/. BUNDLED-EXTENSION RULE (BEXT-02, D-30): bundled_extensions has one row per extension PowerBrowser pre-installs, and its ids equal, as a set both ways, the add-on ids pinned in powerbrowser/packaging/bundled-xpi.json plus the <publisher>.<name> manifest ids of bundled-extensions/*/. Row kinds: gecko-distribution (keys id, kind, spdx equal to the pin's licence, ruling, licence_file, licence_first_line, reason; red when the cached XPI's licence file line 1 differs from the row, one SKIP line when no XPI is cached) and theia-preinstalled (keys id, kind, carries, ruling, reason; the carried package's terms check stays on its package_rulings row and is not duplicated). These rows are never checked against allowed_spdx, which stays the tree-level list.",
+  "allowed_spdx": ["MIT", "MPL-2.0"],
+  "allowed_package_spdx": ["MIT", "ISC", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "0BSD", "BlueOak-1.0.0", "Unlicense", "CC0-1.0", "Python-2.0", "MPL-2.0", "CC-BY-4.0"],
+  "allowed_package_spdx_ruling": {
+    "ruling": "68-B",
+    "status": "approved",
+    "decided": "2026-11-15 (D-42)",
+    "reason": "owner ruling on the per-package permissive set (68-CONTEXT); CC-BY-4.0 is for data packages (caniuse-lite). Chris approved this set and the khroma package_exceptions row on 2026-11-15 (.planning/workstreams/orca/DECISIONS.md D-42)."
+  },
+  "package_exceptions": [
+    {
+      "package": "khroma",
+      "licence_field": null,
+      "licence_file": "license",
+      "licence_first_line": "The MIT License (MIT)",
+      "ruling": "68-B (approved 2026-11-15, D-42)",
+      "reason": "khroma@2.1.0 ships in the web client and mobile-web; its package.json has no license key and khroma/license:1 reads `The MIT License (MIT)`."
+    }
+  ],
+  "package_rulings": [
+    {
+      "package": "@anthropic-ai/claude-agent-sdk",
+      "version_seen": "0.3.284",
+      "ruling": "68-A",
+      "status": "extension",
+      "decided": "2026-11-10 (D-30)",
+      "extension": "bundled-extensions/claude-agent-sdk",
+      "marker": "SEE LICENSE IN README.md",
+      "licence_file": "LICENSE.md",
+      "licence_first_line": "© Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance.",
+      "evidence": "CLAUDE_AGENT_SDK_VERSION=\"0.3.284\" was in orca/out/orcad/orcad-server.js before lane 68-07's externals seam; loaded lazily by loadClaudeAgentSdk (orca/src/main/claude/claude-stream-json-connection.ts:38), used only by Claude's structured session",
+      "terms_check": "confirmed",
+      "terms_check_decided": "2026-11-15 (D-43): Chris, \"Confirmed, terms permit it\"",
+      "windows_id": 44,
+      "reason": "D-30 (2026-11-10): the SDK leaves orcad's bundle and ships in the pre-installed, user-removable Theia extension bundled-extensions/claude-agent-sdk. Chris confirmed on 2026-11-15 that Anthropic's terms permit redistributing that extension (D-43)."
+    }
+  ],
+  "trees": [
+    {
+      "path": "orca",
+      "source": "https://github.com/stablyai/orca",
+      "fetch_script": "scripts/fetch-orca.sh",
+      "pinned_by": ["upstreams.orca_tag", "upstreams.orca_commit"],
+      "spdx": "MIT",
+      "holder": "Lovecast Inc.",
+      "licence_file": "LICENSE",
+      "licence_file_sha256": "ff1b611f80580d49f4b97e93a97b24eb050b0671b26b8afe16341fab699112f3",
+      "reason": "orca/LICENSE:1 reads `MIT License` and orca/LICENSE:3 `Copyright (c) 2026 Lovecast Inc.`, at the pin named by configuration.toml upstreams.orca_tag and upstreams.orca_commit; the licence_file_sha256 digest makes a re-pin that changes the text go red here. P60-R1: Orca is built from source (D-04), so its licence is inherited by what PowerBrowser builds from it.",
+      "licence_surface_note": "60-02 (P60-R3, P60-R4): scripts/build-orca.sh installs orca/mobile/, a separate pnpm workspace whose lockfile brings the Expo / React Native closure into orca/. build:mobile-web compiles it and build:orcad stages the output into out/mobile-web, so that closure is part of this tree's licence surface. Its per-package SPDX ids, together with the root workspace's, are not checked by this row; they are checked per shipped package against allowed_package_spdx, with package_exceptions and package_rulings (the Anthropic agent SDK, which declares SEE LICENSE IN README.md, is a package_rulings row)."
+    },
+    {
+      "path": "upstream",
+      "source": "https://github.com/mozilla-firefox/firefox",
+      "fetch_script": "scripts/fetch-upstream.sh",
+      "pinned_by": ["upstreams.firefox_esr_tag"],
+      "spdx": "MPL-2.0",
+      "holder": "Mozilla Foundation and contributors",
+      "licence_file": "LICENSE",
+      "licence_file_sha256": "a799adf18bfb1911f16086dc0e2a6d1cd0e31272f47e7ee6841b465b74d249de",
+      "reason": "upstream/LICENSE:1 points to toolkit/content/license.html for the licence conditions; the Gecko tree is MPL-2.0 with the notice set that file carries. The full Gecko notice set is derived from upstream/ by scripts/generate-licensing.mjs into LICENSING.md and THIRD-PARTY-NOTICES.txt; this row pins only the root pointer file, so a rebase that changes it goes red here."
+    }
+  ],
+  "bundled_extensions": [
+    {
+      "id": "uBlock0@raymondhill.net",
+      "kind": "gecko-distribution",
+      "spdx": "GPL-3.0-or-later",
+      "ruling": "BEXT-02 (Chris 2026-11-10)",
+      "licence_file": "LICENSE.txt",
+      "licence_first_line": "GNU GENERAL PUBLIC LICENSE",
+      "reason": "uBlock Origin ships unmodified as <GreD>/distribution/extensions/uBlock0@raymondhill.net.xpi at the version pinned in powerbrowser/packaging/bundled-xpi.json (P68-39). The XPI's LICENSE.txt:1 reads `GNU GENERAL PUBLIC LICENSE` and :2 `Version 3, 29 June 2007`; its source headers (js/background.js:6-9) grant `either version 3 of the License, or (at your option) any later version`, hence GPL-3.0-or-later (addons.mozilla.org lists the coarser GPL-3.0-only). The notices link the upstream source at the pinned tag. GPL-3.0 section 6 reading accepted by Chris 2026-11-15 (D-44): the unmodified signed XPI ships with its licence and a source offer in THIRD-PARTY-NOTICES.txt (the upstream source at the pinned tag)."
+    },
+    {
+      "id": "powerbrowser.claude-agent-sdk",
+      "kind": "theia-preinstalled",
+      "carries": "@anthropic-ai/claude-agent-sdk",
+      "ruling": "68-A (D-30)",
+      "reason": "bundled-extensions/claude-agent-sdk carries @anthropic-ai/claude-agent-sdk at the exact version its package.json pins (68-09); Anthropic's terms are checked by the package_rulings row for that package, not here."
+    }
+  ]
+}

@@ -40,6 +40,7 @@ import { delimiter, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveConfig } from './generate.mjs';
+import { liveEnv } from './lib/firefox-bidi.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'install-matrix';
@@ -156,7 +157,7 @@ export async function runMatrix({ tarball, binName, stock, residueNames, cells, 
         const forkLog = join(work, 'fork.log');
         writeFileSync(forkLog, '');
         fork = spawn(bin, ['--headless', '--no-remote', '--profile', pbProfile, 'about:blank'], {
-            cwd: work, env: cleanEnv(pbHome, work), detached: true, stdio: ['ignore', 'ignore', 'ignore'],
+            cwd: work, env: liveEnv(cleanEnv(pbHome, work)), detached: true, stdio: ['ignore', 'ignore', 'ignore'],
         });
         let exited = null;
         fork.on('exit', (code, signal) => { exited = { code, signal }; });
@@ -171,7 +172,7 @@ export async function runMatrix({ tarball, binName, stock, residueNames, cells, 
         let stockErr = null;
         try {
             execFileSync(stock, ['--headless', '--no-remote', '--profile', ffProfile, '--screenshot', shot, 'about:blank'], {
-                cwd: work, env: cleanEnv(ffHome, work), stdio: ['ignore', 'ignore', 'pipe'], timeout: stockTimeoutMs,
+                cwd: work, env: liveEnv(cleanEnv(ffHome, work)), stdio: ['ignore', 'ignore', 'pipe'], timeout: stockTimeoutMs,
             });
         } catch (e) {
             stockErr = String(e.stderr || e.message).trim().split('\n').pop();

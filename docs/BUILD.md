@@ -48,6 +48,18 @@ invocations written as `node scripts/generate.mjs` below are all inside
 that shell. `verify.yml` runs them the same way; `rebase-upstream.yml` does
 not (see the **CI story** note under the rebase section).
 
+**Check exit statuses.** A check script run by `scripts/verify-platform.sh`
+exits 0 when every clause ran and passed, and 1 (any status other than 0 and
+77) when a clause failed. Exit 77 means skipped: at least one clause did not
+run because an input is absent (for example `orca/` not fetched or no built
+tree) and no clause failed, and the script prints one line
+`<name>: SKIP -- <reason>` first. The driver records such a row as SKIP, not
+PASS: `--quick`, `--only` and the full run list the skipped rows and still
+exit 0 if nothing failed, `--gate` fails on every SKIP that no open ledger
+exclusion excuses, and an exit 77 without the SKIP line is recorded as a
+FAIL. The rule is written out in
+`.planning/workstreams/orca/audit-fix/SKIP-PROTOCOL.md`.
+
 ## Theia half
 
 The app composes the frozen 49-`@theia/*`-package daily-drivable set
@@ -424,6 +436,273 @@ rm -rf extensions/acme-drill theia/applications/browser/plugins
 node scripts/generate.mjs && node scripts/generate.mjs --check
 git status --short
 ```
+
+## Orca half
+
+Orca's orcad and web client are built from source at the pin declared in
+`configuration.toml` (`[upstreams] orca_tag` and `orca_commit`), with Orca's
+own scripts, in a separate step. It does not join the Theia build or
+`./mach build` (P59-12).
+
+```
+bash scripts/fetch-orca.sh                               # clone orca/ at the pin and verify it
+nix develop .#orca --command bash scripts/build-orca.sh  # build, de-slot, keep the log
+```
+
+**Why a separate `.#orca` shell:** Orca names pnpm 12 in its `packageManager`
+field; the shell provides Node 24 and corepack, and `build-orca.sh` has
+corepack install exactly that pnpm version (derived from `orca/package.json`,
+checked before anything runs). It also carries `objdump`, which Orca's
+`build:orcad` uses on the native prebuilds. No Electron is downloaded or built:
+`ELECTRON_SKIP_BINARY_DOWNLOAD=1` and `--ignore-scripts` on both installs, so
+Orca's postinstall (its `@electron/rebuild`) never runs.
+
+**What the script runs, in order:** re-verify `orca/` at the pin; apply the overlay
+(step 1b, see "Overlay" below); scrub every
+inherited `ORCA_*` variable (this tree is worked on from inside Orca desktop);
+`pnpm install --frozen-lockfile --ignore-scripts`; Orca's
+`build-workspace-packages.mjs` and `rebuild:node`; the `mobile/` workspace
+install, also scripts-off (P60-R3); `mobile/`'s three code generators, run
+directly in its postinstall's order (P60-R4); `build:mobile-web` (which
+`build:orcad` stages unconditionally); `build:orcad`; the de-slot; `build:web`.
+`orca/` is changed only by the declared seams and PB-added files of
+`orca-overlay/`.
+
+**Why the build de-slots:** `build:orcad` always writes a slot
+(`out/orcad/.server-target`, `.runtime-node`, `.version`) and downloads its own
+Node runtime into `out/runtimes/`. PowerBrowser runs orcad on its own Node
+(D-14), so the script removes all four after `build:orcad` and prints one
+`de-slot removed` line for each; the log shows what was actually written.
+
+**Network at build time:** `github.com` (the clone), `registry.npmjs.org`
+(pnpm and the lockfile closure), `nodejs.org` (Node headers and the runtime
+`build:orcad` fetches before the de-slot removes it).
+
+**Where things go:** everything is under `.mozbuild/`, never in a tracked path:
+logs at `.mozbuild/orca-build/build-<UTC>.log` (full output, kept on success
+and failure), `.mozbuild/corepack`, `.mozbuild/pnpm-store` (2.2 G after the
+first build) and `.mozbuild/orca-node-runtime-cache` (187 M). `orca/` itself is
+gitignored build input.
+
+**Checks:** `orca-build-shape` (full tier) derives the slot marker names from
+`orca/src/shared/orcad-artifacts.ts` and goes red on any marker, any `node`
+executable under `orca/out`, an Electron binary or `node_modules/electron/dist`
+anywhere under `orca/`, or a modified tracked Orca file; it prints one SKIP line
+when no built `orca/` exists. `orca-build-shape-self-test` (quick) proves it
+against nine planted faults.
+
+**Measured on the reference host** (`legion`, Linux 6.18.60 x86_64, glibc 2.42;
+tree `0cc2c129`; `.#orca` shell with Node 24.19.0, corepack 0.35.0, pnpm
+12.14.0): the full script ran in **21 s** wall, warm: the pnpm store, Node
+runtime cache and `orca/node_modules` were left by the earlier attempts in plan
+60-02. The first root install into an empty store took 15.5 s and the first
+`mobile/` install 9.6 s (pnpm's own "Done in" lines). A cold end-to-end run
+from an empty `.mozbuild/` was not measured. Log:
+`.mozbuild/orca-build/build-20261109T234314Z.log`.
+
+### Overlay (orca-overlay/)
+
+`orca-overlay/` is the only place PowerBrowser changes Orca (D-04, D-16,
+P62-09). It holds `seams.json` (each declared seam: `path`, `upstream_blob`,
+`patch`, `reason`), `patches/` (one regenerated patch per seam) and, from the
+first PB-added file on, `files/` (each file at its path inside the Orca tree).
+`orca/` itself is never committed.
+
+**What `build-orca.sh` step 1b does, in order:** reads the declared seam paths
+and refuses one that is not a plain relative path or not a file at the pin;
+fails with `undeclared modification in orca/: <path>` if any other tracked file
+of `orca/` is modified (an edit is never erased); resets the declared paths to
+the pin; applies `patches/` through `scripts/apply-patches.sh --upstream orca
+--patches orca-overlay/patches`, whose before/after blob-hash check makes a
+silent no-op a failure; refuses a `files/` entry that shadows an upstream path,
+removes files a previous run copied that `files/` no longer holds
+(`orca/.pb-overlay-copied`), and copies `files/` in. It prints
+`build-orca: overlay applied <path>` or `overlay copied <path>` per item, and
+it is re-runnable over an applied tree.
+
+**Adding a seam:**
+
+```
+$EDITOR orca/<path>                                    # the few-line edit, in the fetched tree
+echo 'diff --git a/<path> b/<path>' > orca-overlay/patches/NNN-<name>.patch   # seed header only
+bash scripts/regenerate-patches.sh --upstream orca --patches orca-overlay/patches
+git -C orca rev-parse HEAD:<path>                      # the upstream_blob for the seams.json row
+nix develop .#orca --command bash scripts/build-orca.sh
+```
+
+Add the `seams.json` row before the rebuild. A patch is regenerated, never
+typed or text-edited. A seam is at most 20 changed lines of one existing
+upstream file (`SEAM_LINE_BOUND` in the gate), and the number of seams is
+capped by `configuration.toml` `[orca] seam_cap`.
+
+**Adding a PB-added file:** put it under `orca-overlay/files/` at its in-tree
+path (a path upstream does not have, in any letter case), as `.ts`, `.tsx`,
+`.js`, `.mjs` or `.cjs`, and have it carry the literal `pb-overlay:<path>` in
+code that is reachable when the file is used (a provider id, a registration
+name). The built check finds that literal in the bundle; a file nothing imports
+leaves none. The literal proves the file was compiled in, not that it runs.
+
+**Checks:** `orca-overlay` and `orca-overlay-self-test` (quick),
+`orca-overlay-built` (full, vacuous until the first PB-added file), and
+`orca-build-shape` (full), which requires the modified tracked files of `orca/`
+to equal the declared seams.
+
+### Packaged Orca (<GreD>/orca)
+
+Every package carries Orca at `<GreD>/orca` (beside `theia/` and `node/`; on macOS under
+`Contents/Resources/orca`): exactly `package.json`, `out/orcad/**` and `out/web/**` of the built
+`orca/` tree, plus Orca's own `LICENSE` (its MIT copyright and permission notice, which every copy
+must carry). `powerbrowser/packaging/stage-orca-licence.sh` copies that file from the fetched
+`orca/` only when it hashes to the digest `inventory/licence-allowlist.json` records, and each
+packaging script calls it. No root `node_modules`, no `out/orcad-prebuilds`, no `out/runtimes`.
+orcad runs on the package's own staged Node.
+
+The sidecar also carries `theia/node_modules/@powerbrowser/orca-agents/` (its `package.json` and
+`bin/claude-wrapper.mjs`), staged by `powerbrowser/packaging/stage-orca-agents-wrapper.sh` in
+`package-linux.sh` and `package-macos.sh`. The orca-agents backend finds the Claude Code process
+wrapper with `require.resolve`, which Node answers by searching `node_modules` upward from
+`theia/lib/backend/`; without that file no Claude Code session gets an Orca pane (63-CR-01). The
+`packaging-staging` row resolves the specifier from a stage the helper wrote. Windows has no
+launcher yet (WINDOWS 53), so its sidecar does not carry it.
+
+node-pty is built on each target's own runner, never cross-built: on legion for Linux (build-linux),
+on hosted runners for the others. Orca's prebuild manifest
+(`orca/out/orcad-prebuilds/manifest.json`) proves it: `orca-packaged-tree --prebuild-manifest`
+requires exactly one slot whose platform and arch equal the target and whose files' sha256 set
+equals the staged `node-pty/build/Release/*`.
+
+Hosted Orca jobs in `.github/workflows/release.yml`, each with the `windows-sidecar` trust shape
+(no secret, no environment, `contents: read`, no persisted token, the full-SHA gate, Node from
+`node-runtime.json`):
+- `macos-orca-arm64` (macos-15) and `macos-orca-x64` (macos-15-intel): two named jobs, never a
+  matrix. Each runs `fetch-orca.sh` and `build-orca.sh`, checks its staged tree with
+  `orca-packaged-tree --target macos-<arch>`, and uploads the artifact as three files:
+  `tree.tar`, `BUILD_ROOT` and `SHA256SUMS` (68-CR-03). `actions/upload-artifact` keeps no file
+  mode, so the staged tree (`package.json`, `out/orcad`, `out/web`, `orcad-prebuilds-manifest.json`,
+  `BUILD_ROOT` and the tree's own `SHA256SUMS`) travels as one tar, which keeps the executable bit
+  of node-pty's `spawn-helper`, the ripgrep binaries and agent-browser. The artifact's `SHA256SUMS`
+  lists `tree.tar` and `BUILD_ROOT`, and its SHA-256 leaves the job as the output `sums_sha256`.
+- `macos-orca-universal` (ubuntu-latest) admits both artifacts with `check-win-sidecar.sh check`
+  against those outputs, and only then unpacks each `tree.tar` with `tar -xpf` (modes kept) and
+  checks the unpacked tree against the `SHA256SUMS` the tar carried. It merges the two trees with
+  `package-macos.sh orca-universal`, purges both build roots, and
+  runs `orca-packaged-tree --target macos` and `package-target-natives --target macos`.
+- `windows-orca` (lane p68-10) builds the win64 tree the same way; `build-windows` admits it with
+  `PB_WIN_ORCA_SUMS_SHA256`, and `package-windows.sh` runs `orca-packaged-tree --target win64`.
+
+No Linux-path job needs any of them, directly or transitively (`release-shape`
+`linux-independence`). `build-orca.sh` runs unchanged on each runner: it requires `objdump` only
+when `node -p process.platform` prints `linux`, and lists the overlay without `find -printf`
+(`build-orca-portable-self-test`).
+
+**Licence guard:** `build-linux` runs `node scripts/verify-licence-allowlist.mjs --rulings` before
+any Orca step, so no release is built while an Orca licence ruling is pending (P68-21);
+`build-windows` carries the same step.
+
+**Flatpak:** the manifest grants `--filesystem=home`, because Orca worktrees, agent CLIs and their
+credentials live under HOME (P68-07). That exposes HOME only, not host binaries under `/usr`, so an
+agent CLI installed system-wide on the host is not reachable from the sandbox.
+
+**Checks:** `orca-packaged-tree-self-test`, `orca-macos-merge-self-test`,
+`build-orca-portable-self-test` and `orca-packaged-live-self-test` (quick); `orca-packaged-tree`
+and `orca-packaged-live` (full, over the container-built tarball; `orca-packaged-live` runs under
+the live lock). `package-target-natives` judges every ELF, PE and Mach-O by magic, not by name.
+
+### Pane bundle (Phase 64)
+
+`scripts/build-orca-panes.sh` builds the Orca pane bundle: Orca's own pane
+components (`TerminalPane`, the native chat view, `EmulatorPane`, `EditorPanel`)
+compiled by Orca's own Vite from three PB-added overlay files,
+`src/renderer/src/pb/pb-pane-mount.tsx` (the entry), `vite.pb-panes.config.ts`
+(an app-mode ES build over `vite.web.config.ts`, never `build.lib`, which inlines
+every asset) and `pb-css-scope.mjs` (the PostCSS pass that scopes Orca's sheet to
+the pane). Output: `orca/out/web/assets/pb-panes/`, holding `pb-panes.js` (an ES
+module), one stylesheet `pb-panes.css` and every other emitted file, referenced by
+relative URL. Theia's `orca-panes` extension serves that directory and mounts the
+panes in Lumino widgets.
+
+The bundle ships no React. It reads the host's React from
+`globalThis[Symbol.for('powerbrowser.orca-panes.react')]`, and the export names of
+those modules are read at build time from Orca's own React under
+`orca/node_modules` (19.2.8, the version Theia ships). So `build-orca.sh` needs no
+Theia install. The Theia side checks the match: `orca-pane-entry` compares Orca's
+React major.minor with Theia's whenever Theia is installed, and the `orca-panes`
+loader refuses at run time a bundle whose `reactIdentity` is not Theia's React.
+
+`build-orca.sh` runs it as step 9, after `build:web`. It empties `pb-panes/`
+first, so every later step that writes into `pb-panes/` (Phase 66's browser-host
+step) runs after it. On an already-built tree,
+
+```
+nix develop .#orca --command bash scripts/build-orca.sh --panes-only
+```
+
+re-runs fetch-verify, the overlay copy, the pane step and every later step that
+writes into `pb-panes/`, and refuses when `orca/out/web/web-index.html` is absent.
+`bash scripts/build-orca-panes.sh --standalone` also builds the React-bundled
+variant into `.mozbuild/orca-panes-standalone/`, for the standalone page and as the
+two-copy control of the React check. Like `build-orca.sh`'s other steps it runs in
+its caller's shell: it starts no Nix shell of its own, reads nothing under
+`theia/`, and keeps to the portability rules of the hosted runners. No seam is
+added: the overlay keeps its one seam.
+
+### Browser host bundle (pb-browser-host.js)
+
+`scripts/build-orca-browser-host.sh` builds the thin browser host (Phase 66,
+P66-02): a PB-owned client of orcad's `browser.clientHost.attach` protocol, through
+which Orca's agents and Orca's UI reach PowerBrowser web tabs. Orca's own Vite
+compiles it from two PB-added overlay files, `src/renderer/src/pb/browser-host/pb-browser-host.ts`
+(the entry) and `vite.pb-browser-host.config.ts` (a library build over
+`vite.web.config.ts`'s aliases and defines: one ES file, no code splitting, minify
+off, Orca's plugins left out). It writes `pb-browser-host.js` into the pane bundle's
+directory, the `outDir` of `vite.pb-panes.config.ts` (`orca/out/web/assets/pb-panes/`),
+without emptying it, so the Theia backend's pane route (`/orca-panes/`) serves it as
+`/orca-panes/pb-browser-host.js`. orcad's port never serves it, and no file is added to
+the bridge folder. Beside it, in the ignored `orca/out/pb-browser-host-meta/`, the build
+records the bundle's module list (`modules.json`) and orca/'s tracked status just
+before Vite ran (`tracked-before.txt`); the tracked status after the build must be
+unchanged.
+
+`build-orca.sh` runs it as step 10, right after the pane step, on the full path and on
+`--panes-only` alike: the pane step empties `pb-panes/`, so the host is rebuilt after
+it on both paths.
+
+Why it is not Orca's `WebRuntimeClient` (condition 1 of spike 005): the host imports
+only Orca's shared pairing and protocol modules (`createPairedE2EEClientHandshake`,
+`BrowserClientHostEvent`, the capability constants) and the web E2EE primitives. It
+passes the browser-host capabilities through `sealAuth`'s own option instead of
+writing Orca's capability constant, and it carries the attach subscription and every
+command result on its one socket instead of calling a private subscribe. A token
+credential uses legacy framing; a device-key credential uses framing v2 (A9).
+
+The pane entry imports one more overlay file for its side effect,
+`src/renderer/src/pb/browser-host/pb-browser-host-link.ts`. It defines
+`globalThis[Symbol.for('powerbrowser.orca-browser.link')]` with `connection()` (the
+pane client's endpoint and its current credential, so the host authenticates as the
+same paired device, A3 b) and `setPlacement(id)` (Orca's renderer then creates browser
+pages with a client placement on the host, A3 a), and dispatches
+`powerbrowser-orca-browser-link` once after the pane client's first `status.get`.
+
+The rows that prove it: `orca-browser-host-bundle` (full; the static clauses, then the
+bundle imported in Node and attached to a scratch orcad: CLI `tab create` arrives as
+one `createPage`, `goto` is answered, a user close drops the page; run it under
+`flock /home/chris/coding/Power-Browser/.git/pb-live.lock` with `ORCA_*` unset),
+`orca-browser-host-bundle-self-test` (quick, hermetic plants) and
+`orca-overlay-built` (each overlay file's marker in the built output). The full row
+also needs Orca's CLI, which `build-orca.sh` does not build:
+
+```
+( cd orca && nix develop ..#orca --ignore-environment --keep HOME --keep TERM --command bash -c \
+  'export COREPACK_HOME=$PWD/../.mozbuild/corepack PATH=$PWD/../.mozbuild/corepack/bin:$PATH; \
+   pnpm --config.verify-deps-before-run=false run build:packages && ORCA_CLI_BUILD_COMPILER=tsrs node config/scripts/build-cli.mjs' )
+```
+
+`--config.verify-deps-before-run=false` keeps pnpm from re-installing `orca/node_modules` with its own
+defaults (the global virtual store) instead of `build-orca.sh`'s knobs. Measured in 66-06: without it the
+re-install moved the module layout, and `licensing` derived a package Orca does not ship (`entities@7.0.1`,
+a test-only dependency of happy-dom); re-running `build-orca.sh` restores the layout.
+
+Without the bundle, orcad or the CLI the row prints a named SKIP. No seam is added.
 
 ## Firefox half
 
@@ -1142,6 +1421,9 @@ bitmaps (`wizHeader.bmp`, `wizHeaderRTL.bmp`, `wizWatermark.bmp`),
 artwork yet; and `defines.nsi` now takes `AppName` from the build's `MOZ_APP_NAME` and `CERTIFICATE_NAME` from the generated `CompanyName`, and the installer sends no telemetry ping (`patches/040-powerbrowser-nsis.patch`, NG-066, row `ng066-nsis-branding-no-ping`). `CERTIFICATE_ISSUER` stays upstream's until a fork Windows signing certificate exists (deferred with the Windows packaging row). The row's PASS line says the compile
 only.
 
+`package-windows.sh` stages the pinned add-on XPIs into `distribution/extensions/` with
+`stage-bundled-xpi.sh`, as the Linux package does (see "Linux package" for the pin and the cache).
+
 ### Packaging hosts (08-05): capability record
 
 One row per host. Every later task cites its host by name; no artifact work
@@ -1263,9 +1545,29 @@ Procedure, in `nix develop .#firefox-macos` with `MOZ_FETCHES_DIR` set as above:
    per Darwin target through `buildUpdateXml`, replaces `.mozbuild/macos-package/`, and runs the
    `macos-package-payload` row.
 
+Orca (P68-31): each per-architecture run admits the `macos-orca-<arch>` artifact
+(`PB_MAC_ORCA_DIR`, against `PB_MAC_ORCA_SUMS_SHA256`), unpacks its `tree.tar` with `tar -xpf`,
+re-checks the unpacked tree against its own `SHA256SUMS` (an artifact without `tree.tar` predates
+68-CR-03 and is refused), stages that tree as `Contents/Resources/orca` with Orca's own `LICENSE`
+from the fetched `orca/` (`stage-orca-licence.sh`, checked against `inventory/licence-allowlist.json`), and
+judges its files by magic: every Mach-O must be a thin slice of the target, an ELF or a PE is red.
+`universal` lifts both `orca/` trees out before `unify.py` and merges them with `orca-universal`.
+The standalone mode is `bash powerbrowser/packaging/package-macos.sh orca-universal ARM X64 OUT`.
+It runs the merge plan `node scripts/lib/orca-artifacts.mjs macos-merge-plan ARM X64 orca`. That
+plan derives the arch-named pairs from Orca's own `ORCAD_RIPGREP_ARTIFACTS` and
+`orcadAgentBrowserNativeName('darwin', arm64|x64)`, so no name is copied into this tree. Each pair
+becomes one fat file staged under both names, and a same-name thin Mach-O pair is merged in
+place. Every other file must be byte-identical, and the plan is red naming the file otherwise.
+
 Not run on this tree yet: it needs both built objdirs, and the cross configure stops before the
 Gecko compile until the Darwin `rust-std` question is settled (`BLOCKED.md` items 8 and 9). The
-sidecar merge was exercised against synthetic thin Mach-O pairs with `llvm-lipo`.
+sidecar merge was exercised against synthetic thin Mach-O pairs with `llvm-lipo`, and so was
+`orca-universal` (one arch-named pair from the real tables, one same-name native, one identical
+text file).
+
+Pre-installed add-ons: each per-architecture run stages the pinned XPIs into
+`Contents/Resources/distribution/extensions/` with `stage-bundled-xpi.sh`, as the Linux package does
+(see "Linux package" below for the pin, the cache and why there is no policy entry).
 
 ### Linux package (NG-063, NG-072)
 
@@ -1297,7 +1599,34 @@ there is no manual pin step.
 The Gecko binaries are built in the Nix shell, so the package runs where those
 store paths exist.
 
-Checks: `ng063-packaged-launch`, `ng072-policies-packaged-webextension`.
+Orca: `package-linux.sh` stages `orca/`'s `package.json`, `out/orcad` and `out/web` as
+`<GreD>/orca`, removes every ELF RUNPATH under `theia/`, `node/` and `orca/` with
+`patchelf --remove-rpath`, and fails when a staged file names the host build root. The host root
+is passed into the container as `PB_HOST_ROOT` (`-e PB_HOST_ROOT="$PWD"` in `release.yml`); the
+script refuses to run without it, because inside the container the checkout is `/src`, a string
+every esbuild module key contains. `bash powerbrowser/packaging/package-linux.sh --orca-stage-only
+DIR` runs only the Orca half (staging into `DIR/orca`, the RUNPATH pass and the host-root grep), so
+a host without the release container can prove it; `release.yml` never uses it.
+
+Checks: `ng063-packaged-launch`, `ng072-policies-packaged-webextension`, `orca-packaged-tree`.
+
+Pre-installed add-ons (BEXT-02): right after the `policies.json` copy, `package-linux.sh` calls
+`bash powerbrowser/packaging/stage-bundled-xpi.sh "$STAGE/distribution"`, which stages every add-on
+pinned in `powerbrowser/packaging/bundled-xpi.json` (today uBlock Origin) as
+`distribution/extensions/<id>.xpi`. The file is the AMO-signed XPI byte for byte, downloaded once
+into `.mozbuild/bundled-xpi/<id>-<version>.xpi` and checked against the pin's sha256 on every
+staging; a mismatch fails naming the id and both digests. Gecko installs it into the profile on the
+profile's first start, with no network and enabled, and records
+`extensions.installedDistroAddon.<id>`, so an add-on the user removed is never reinstalled, across
+relaunches and app upgrades alike. There is deliberately no `ExtensionSettings` entry in
+`policies.json`: its `force_installed` and `normal_installed` modes stop the user removing the
+add-on. To bump a pin, change `version`, `url` and `sha256` together (the sha256 of the file the url
+serves), then run `node scripts/verify-bundled-xpi.mjs`: it re-derives the filter-list hosts from the
+new XPI's `assets/assets.json` against `powerbrowser/endpoint-allowlist.json`. There is no automatic
+update of the add-on itself (`extensions.update.autoUpdateDefault` is false), so a pin bump is the
+update path. Checks: `bundled-xpi`, `bundled-xpi-self-test`, `bundled-xpi-packaged`, `bundled-xpi-live`
+(run under `flock /home/chris/coding/Power-Browser/.git/pb-live.lock`; `--live --dev` places the
+cached XPI in the dev `objdir/dist/bin/distribution/extensions/` for the run and removes it after).
 
 ### Per-OS install matrix with update hops (08-05)
 

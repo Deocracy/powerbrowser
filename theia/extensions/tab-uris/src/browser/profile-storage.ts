@@ -117,6 +117,21 @@ export class ProfileStorageService extends LocalStorageService {
         return Object.prototype.hasOwnProperty.call(map, key) ? map[key] as T : defaultValue;
     }
 
+    /**
+     * Phase 65 (CA-05): the stored keys starting with `prefix`, as setData/getData take them. Lets
+     * a workspace-folder sync copy a workspace prefix's keys before the prefix moves. In the
+     * no-chrome fallback the keys live in window.localStorage under the base class's prefix().
+     */
+    async keysWithPrefix(prefix: string): Promise<string[]> {
+        const map = await this.load();
+        if (map) {
+            return Object.keys(map).filter(key => key.startsWith(prefix));
+        }
+        const base = this.prefix('');
+        const full = this.prefix(prefix);
+        return Object.keys(window.localStorage).filter(key => key.startsWith(full)).map(key => key.slice(base.length));
+    }
+
     /** Runs the onWillFlush listeners (bounded: SHELL_STATE_WILL_FLUSH_TIMEOUT_MS), so their writes are in the map before save(). */
     async fireWillFlush(): Promise<void> {
         await WaitUntilEvent.fire(this.onWillFlushEmitter, {}, SHELL_STATE_WILL_FLUSH_TIMEOUT_MS);

@@ -167,7 +167,12 @@
  *
  * A self-test plant is a runtime mutation in its own session (a chrome-scope
  * or Theia-frame evaluate), never a file edit, and notes `PLANT <name>
- * applied` only after reading the mutation back.
+ * applied` only after reading the mutation back. Both modes launch a real
+ * PowerBrowser (the plants are faults injected into the running product, so there
+ * is no hermetic form of this self-test): each takes <git common dir>/pb-live.lock
+ * itself when started without PB_LIVE_LOCK_HELD=1 (lib/live-lock.mjs), and
+ * exits 77 with one "SKIP -- <reason>" line when no built PowerBrowser exists
+ * (SKIP-PROTOCOL.md).
  *
  * PB_CAPTURE_DIR=<dir> (39-07, 35 T12-T15): the session runs headed and
  * captureShell (scripts/lib/pb-kwin.mjs) writes 35-T12-menu.png (context-menu,
@@ -178,7 +183,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -204,6 +209,9 @@ import {
 } from './lib/pb-live-probe.mjs';
 import { REPO_ROOT, pollFor, probe, sourceConst } from './lib/pb-relaunch.mjs';
 import { captureShell } from './lib/pb-kwin.mjs';
+import { FIREFOX_BIN } from './lib/firefox-bidi.mjs';
+import { holdLiveLock, lockWiringFails } from './lib/live-lock.mjs';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 
 const MODES_ACTIVATE_COMMAND_ID = sourceConst('theia/extensions/modes/src/browser/modes-commands.ts', 'MODES_ACTIVATE_COMMAND_ID');
 
@@ -918,6 +926,19 @@ async function pickRow(app, theia, label, level = 0) {
     return true;
 }
 
+/**
+ * What a failure message may say about the clipboard (audit harness-live-panels-15): a headed run reads the desktop
+ * clipboard, which holds whatever the user last copied, so the content is never printed. Only its length and whether it is
+ * this check's own test value, a URL on the check's own server, or neither.
+ */
+export function describeClipboard(value, own = []) {
+    if (value === null || value === undefined) return 'could not be read';
+    const text = String(value);
+    if (text === '') return 'is empty';
+    const known = ['pb-sentinel', 'alpha', 'gamma', ...own].includes(text) ? "one of this check's own test values" : /^https?:\/\/127\.0\.0\.1:\d+\//.test(text) ? "a URL on this check's own server" : "not one of this check's values (not printed)";
+    return `holds ${text.length} character(s), ${known}`;
+}
+
 const clipboardText = app => inChrome(app, `try {
     const trans = Cc['@mozilla.org/widget/transferable;1'].createInstance(Ci.nsITransferable);
     trans.init(null);
@@ -1367,8 +1388,14 @@ async function contextMenu({ app, pages, plant, fail, note }) {
     if (!await pickRow(app, theia, ftlLabel('main-context-menu-image-copy-link'))) {
         return fail('the image menu has no Copy Image Link row to pick');
     }
-    if (await settle(() => clipboardText(app), t => t === assets.url('/pixel.png'), 3000) !== assets.url('/pixel.png')) {
-        return fail('Copy Image Link did not put the image URL on the clipboard');
+    // WINDOWS 43: read the clipboard only once the pick has run its command (the menu closes on a run row), so a
+    // click that missed the row is named as that, not as a clipboard failure.
+    if (await settle(() => menuRows(app), rows => rows === null, 3000) !== null) {
+        return fail('the Copy Image Link click left the image menu open (the row command did not run)');
+    }
+    const copied = await settle(() => clipboardText(app), t => t === assets.url('/pixel.png'), 3000);
+    if (copied !== assets.url('/pixel.png')) {
+        return fail(`Copy Image Link did not put the image URL on the clipboard (it ${describeClipboard(copied)})`);
     }
     mark = (await pushes(app)).length;
     await openMenuAt(app, page, tabId, await centreOf(app, page, '#img'));
@@ -1794,15 +1821,19 @@ async function menuEdit({ app, pages, plant, fail, note }) {
         return fail('the second field has no Paste row to pick');
     }
     const fieldValue = () => app.evaluateIn(tools.page, `document.getElementById('field2').value`);
-    if (await settle(fieldValue, v => v === 'alpha', 3000) !== 'alpha') {
-        return fail('Paste did not set the second field');
+    // WINDOWS 43: read only after a miss, so the state that names the cause costs no time on a green run.
+    const editState = async seen => JSON.stringify({ seen, menu: (await menuRows(app))?.map(r => `${r.label}${r.disabled ? ' (off)' : ''}`) ?? 'closed', focused: await app.evaluateIn(tools.page, `document.activeElement?.id || document.activeElement?.localName || null`) });
+    const pasted = await settle(fieldValue, v => v === 'alpha', 3000);
+    if (pasted !== 'alpha') {
+        return fail(`Paste did not set the second field (${await editState(pasted)})`);
     }
     await app.evaluateIn(tools.page, `document.getElementById('field2').focus(); true`);
     if (!await pickFromMenu(app, tools, '#field2', ftlLabel('text-action-undo'))) {
         return fail('the second field has no Undo row to pick');
     }
-    if (await settle(fieldValue, v => v === '', 3000) !== '') {
-        return fail('Undo did not restore the second field\'s previous value');
+    const undone = await settle(fieldValue, v => v === '', 3000);
+    if (undone !== '') {
+        return fail(`Undo did not restore the second field's previous value (${await editState(undone)})`);
     }
     await inChrome(app, `Cc['@mozilla.org/widget/clipboardhelper;1'].getService(Ci.nsIClipboardHelper).copyString('pb-sentinel'); return true;`);
     if (!await pickFromMenu(app, tools, '#img', ftlLabel('main-context-menu-image-copy'))) {
@@ -1832,16 +1863,23 @@ const IMAGE_FLAVOURS = ['application/x-moz-nativeimage', 'image/png', 'image/jpe
 async function applyIframeEditPlants(app, plant, note) {
     if (plant === 'edit-rows-top-document') {
         // CR-02's defect: every Controllers read and command goes to the top document, never the right-clicked frame.
+        // WINDOWS 43 (59-09): a text field's rows read and run through the edit-state actor, so its messages go to the
+        // top document's actor too; otherwise this plant would no longer reach the rows it is meant to break.
         if (await inChrome(app, `const { ControllersParent } = ChromeUtils.importESModule('resource://gre/actors/ControllersParent.sys.mjs');
-            const proto = ControllersParent.prototype;
-            const topOf = actor => actor.browsingContext.top === actor.browsingContext ? actor : actor.browsingContext.top.currentWindowGlobal.getActor('Controllers');
-            for (const name of ['isCommandEnabled', 'doCommand']) {
-                const real = proto[name];
-                const planted = function (cmd) { return real.call(topOf(this), cmd); };
-                planted.__pbPlanted = true;
-                proto[name] = planted;
+            const { PowerBrowserEditStateParent } = ChromeUtils.importESModule('chrome://powerbrowser/content/PowerBrowserAPI.sys.mjs');
+            const planted = [];
+            for (const [Actor, actorName, names] of [[ControllersParent, 'Controllers', ['isCommandEnabled', 'doCommand']], [PowerBrowserEditStateParent, 'PowerBrowserEditState', ['sendQuery', 'sendAsyncMessage']]]) {
+                const proto = Actor.prototype;
+                const topOf = actor => actor.browsingContext.top === actor.browsingContext ? actor : actor.browsingContext.top.currentWindowGlobal.getActor(actorName);
+                for (const name of names) {
+                    const real = proto[name];
+                    const wrapped = function (...args) { return real.apply(topOf(this), args); };
+                    wrapped.__pbPlanted = true;
+                    proto[name] = wrapped;
+                    planted.push(proto[name].__pbPlanted === true);
+                }
             }
-            return proto.isCommandEnabled.__pbPlanted === true && proto.doCommand.__pbPlanted === true;`) === true) {
+            return planted.length === 4 && planted.every(Boolean);`) === true) {
             note('PLANT edit-rows-top-document applied');
         }
     }
@@ -3135,9 +3173,39 @@ async function main(args) {
     }
 }
 
+/** --redaction-self-test: the clipboard description over fixtures; hermetic, no browser. */
+function redactionSelfTest() {
+    const secret = 'hunter2-PASSWORD-0123456789-abcdefghijklmnopqrstuvwxyz-0123456789-abcdefghijklmnopqrstuvwxyz-tail';
+    const cases = [
+        ['a secret the user copied is described by length only', describeClipboard(secret), s => /^holds 97 character\(s\), not one of this check's values \(not printed\)$/.test(s) && !s.includes('hunter2') && !s.includes('tail')],
+        ["the check's own sentinel is named", describeClipboard('pb-sentinel'), s => /own test values/.test(s)],
+        ["a URL on the check's own server is named", describeClipboard('http://127.0.0.1:41234/pixel.png'), s => /this check's own server/.test(s)],
+        ['an empty clipboard', describeClipboard(''), s => s === 'is empty'],
+        ['an unreadable clipboard', describeClipboard(null), s => s === 'could not be read'],
+        ["a lookalike host is not the check's own server", describeClipboard('http://127.0.0.1.evil.example/pixel.png'), s => /not one of this check's values/.test(s)],
+    ];
+    let bad = 0;
+    for (const [name, got, test] of cases) { if (test(got)) console.log(`  ok ${name} -> ${got}`); else { console.error(`  FAIL ${name} -> ${got}`); bad += 1; } }
+    const wiring = lockWiringFails(NAME, import.meta.url);
+    if (wiring.length) { console.error(`  FAIL ${wiring.join('; ')}`); bad += 1; } else console.log('  ok the live path awaits holdLiveLock before it launches anything');
+    // The failure message built from the call site's template must carry no clipboard content.
+    const msg = `Copy Image Link did not put the image URL on the clipboard (it ${describeClipboard(secret)})`;
+    if (msg.includes('hunter2')) { console.error('  FAIL the failure message prints clipboard content'); bad += 1; } else console.log('  ok the failure message prints no clipboard content');
+    console.log(bad ? `${NAME} --redaction-self-test: FAIL -- ${bad} case(s)` : `${NAME} --redaction-self-test: PASS -- ${cases.length} cases; no clipboard content reaches a failure line`);
+    return bad ? 1 : 0;
+}
+
 const args = process.argv.slice(2);
+if (args.includes('--redaction-self-test')) process.exit(redactionSelfTest());
 if (args.includes('--help')) {
     console.log(`Usage: node scripts/${NAME}.mjs [--scenario ${Object.keys(SCENARIOS).join(',')}] | --self-test [--scenario a,b]`);
     process.exit(0);
 }
+// Both modes launch a browser. Nothing is launched before the next two steps.
+if (!existsSync(FIREFOX_BIN)) {
+    console.log(skipLine(NAME, `no built PowerBrowser (${FIREFOX_BIN} is absent); build the Firefox half as docs/BUILD.md says, or point PB_FIREFOX_BIN at a build`));
+    process.exit(SKIP_EXIT);
+}
+const held = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
+if (held !== null) process.exit(held);
 process.exit(args.includes('--self-test') ? await selfTest(args) : await main(args));

@@ -12,12 +12,19 @@
 #   - the package zip `mach package` wrote is REWRITTEN from the staged tree (as package-linux.sh rewrites its
 #     tarball), because the installer and the complete MAR are built from that zip: without the rewrite they
 #     would carry a stock Gecko tree with no sidecar and no Node runtime.
+# Orca (Phase 68, P68-03) comes the same way: ONLY from the hosted windows-orca artifact (PB_WIN_ORCA_DIR, built on
+# windows-latest so node-pty is built on its own target), admitted by check-win-sidecar.sh against
+# PB_WIN_ORCA_SUMS_SHA256 before anything is staged. package.json, out/orcad and out/web become <GreD>/orca; the
+# staged tree is compared with the admitted one and its node-pty slot with the artifact's orcad-prebuilds-manifest.json
+# (verify-orca-packaged-tree.mjs --target win64), and the hosted build root is purged from it. The prebuild manifest,
+# BUILD_ROOT and SHA256SUMS never reach the stage.
 # After the stage it runs `mach repackage installer` and `mach repackage mar` with the arguments the pinned
 # tree defines (upstream/python/mozbuild/mozbuild/mach_commands.py: the installer command at 3115-3152 requires --tag
 # --setupexe --output --sfx-stub; the mar command at 3467-3475 requires --input --mar --output --arch), and writes both
 # to $OBJ/dist/release-windows/, the one directory the release workflow uploads from.
 # Run from the repo root inside the release container, after `./mach build` with the Windows mozconfig:
 #   PB_WIN_SIDECAR_DIR=/path/to/windows-latest-artifact PB_WIN_SIDECAR_SUMS_SHA256=<64 hex> \
+#   PB_WIN_ORCA_DIR=/path/to/windows-orca-artifact PB_WIN_ORCA_SUMS_SHA256=<64 hex> \
 #     bash powerbrowser/packaging/package-windows.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -25,12 +32,17 @@ OBJ="$ROOT/objdir-windows-x86_64"
 OUT="$OBJ/dist/release-windows"
 MOZCONFIG_WIN="$ROOT/generated/packaging/mozconfig-windows-x86_64"
 SIDECAR_DIR="${PB_WIN_SIDECAR_DIR:-}"
+ORCA_DIR="${PB_WIN_ORCA_DIR:-}"
 fail() { echo "package-windows: FAIL -- $*" >&2; exit 1; }
 
 test -n "$SIDECAR_DIR" || fail "PB_WIN_SIDECAR_DIR is unset; point it at the windows-latest sidecar artifact (never a legion build)"
 # The artifact carries the package-linux.sh layout: TheiaService.sys.mjs loads <GreD>/theia/lib/backend/main.js.
 test -f "$SIDECAR_DIR/lib/backend/main.js" || fail "$SIDECAR_DIR/lib/backend/main.js is absent from the windows-latest sidecar artifact"
 bash "$ROOT/powerbrowser/packaging/check-win-sidecar.sh" check "$SIDECAR_DIR" "${PB_WIN_SIDECAR_SUMS_SHA256:-}" || fail "the sidecar artifact was not admitted; nothing is staged"
+test -n "$ORCA_DIR" || fail "PB_WIN_ORCA_DIR is unset; point it at the windows-latest windows-orca artifact (never a legion build)"
+# The hosted Orca artifact layout: OrcaService.sys.mjs loads <GreD>/orca/out/orcad/orcad.js.
+test -f "$ORCA_DIR/out/orcad/orcad.js" || fail "$ORCA_DIR/out/orcad/orcad.js is absent from the windows-latest windows-orca artifact"
+bash "$ROOT/powerbrowser/packaging/check-win-sidecar.sh" check "$ORCA_DIR" "${PB_WIN_ORCA_SUMS_SHA256:-}" || fail "the windows-orca artifact was not admitted; nothing is staged"
 
 # The pinned win32-x64 Node release (PKG-13): url and sha256 from node-runtime.json, never typed here.
 read -r NODE_VERSION NODE_URL NODE_SHA < <(python3 -c 'import json,sys; p=json.load(open(sys.argv[1]))["win32-x64"]; print(p["version"], p["url"], p["sha256"])' "$ROOT/powerbrowser/packaging/node-runtime.json")
@@ -63,6 +75,18 @@ with zipfile.ZipFile(archive) as z:
 PY
 test -f "$STAGE/node/node.exe" || fail "the staged Windows node.exe is absent"
 cp "$ROOT/powerbrowser/distribution/policies.json" "$STAGE/distribution/policies.json"
+bash "$ROOT/powerbrowser/packaging/stage-bundled-xpi.sh" "$STAGE/distribution"
+
+# <GreD>/orca: the packaged root only (package.json, out/orcad, out/web, and Orca's own LICENSE), never the
+# provenance files.
+rm -rf "$STAGE/orca"
+mkdir -p "$STAGE/orca/out"
+cp -a "$ORCA_DIR/package.json" "$STAGE/orca/package.json"
+cp -a "$ORCA_DIR/out/orcad" "$ORCA_DIR/out/web" "$STAGE/orca/out/"
+# packaging-prefs-network-02: Orca's own MIT notice, from the fetched orca/ and verified against the licence allowlist.
+bash "$ROOT/powerbrowser/packaging/stage-orca-licence.sh" "$ROOT" "$STAGE/orca"
+bash "$ROOT/scripts/run-no-skip.sh" -- node "$ROOT/scripts/verify-orca-packaged-tree.mjs" --target win64 --built "$ORCA_DIR" --stage "$STAGE/orca" \
+    --prebuild-manifest "$ORCA_DIR/orcad-prebuilds-manifest.json" || fail "the staged Orca tree is not the admitted windows-orca tree for win64"
 
 # Checkout-path purge, as package-linux.sh does for its backend bundles: no staged text file may name a
 # builder's checkout. The sidecar was built on windows-latest, so it carries the hosted workspace root the job
@@ -71,10 +95,11 @@ cp "$ROOT/powerbrowser/distribution/policies.json" "$STAGE/distribution/policies
 # module key (node_modules/.../src/...) contains, so that search refused every correctly built sidecar.
 # Native binaries are checked by the natives gate below, not here.
 bash "$ROOT/powerbrowser/packaging/check-win-sidecar.sh" purge "$SIDECAR_DIR" "$STAGE/theia" "$STAGE/node" || fail "the staged sidecar names the hosted build root"
+bash "$ROOT/powerbrowser/packaging/check-win-sidecar.sh" purge "$ORCA_DIR" "$STAGE/orca" || fail "the staged Orca tree names the hosted build root"
 
 # PKG-13 native gate, before precomplete is refreshed: every .node, rg and node binary in the
 # Windows stage must be PE32+ x86-64. A Linux or Mach-O native here stops the stage naming the file.
-node "$ROOT/scripts/verify-package-target-natives.mjs" --target win64 --stage "$STAGE" \
+bash "$ROOT/scripts/run-no-skip.sh" -- node "$ROOT/scripts/verify-package-target-natives.mjs" --target win64 --stage "$STAGE" \
     || fail "a staged native is not PE32+ x86-64; the Windows stage is not assembled"
 
 ( cd "$STAGE" && python3 "$ROOT/upstream/config/createprecomplete.py" )
@@ -125,4 +150,4 @@ test -s "$OUT/$BASE.complete.mar" || fail "the complete MAR was not written to $
 # setup.exe stub, not only the installer built from them. Both are data there: signed and repacked, never executed.
 cp "$ZIP" "$OUT/$BASE.zip"
 cp "$SETUPEXE" "$OUT/setup.exe"
-echo "package-windows: staged $STAGE (sidecar from $SIDECAR_DIR, node $NODE_VERSION win32-x64); wrote $OUT/$BASE.installer.exe, $OUT/$BASE.complete.mar, and the $BASE.zip and setup.exe the sign job repacks"
+echo "package-windows: staged $STAGE (sidecar from $SIDECAR_DIR, Orca from $ORCA_DIR, node $NODE_VERSION win32-x64); wrote $OUT/$BASE.installer.exe, $OUT/$BASE.complete.mar, and the $BASE.zip and setup.exe the sign job repacks"

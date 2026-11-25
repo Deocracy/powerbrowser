@@ -23,8 +23,11 @@
 //     in, focused before the click) and one in the visible page's realm. A
 //     sentinel goes on the selection clipboard. Positive controls first, same
 //     session, same recorders: a trusted middle-click into each editable must
-//     paste (else NOT SCORED, never a pass), and the push recorder must hold
-//     /b's state push. Then a trusted middle-click on /a's strip tab closes /a
+//     paste (else NOT SCORED, never a pass), the Theia-frame paste must be the
+//     sentinel itself, and the push recorder must hold /b's state push. When
+//     the Orca pane bundle is built it must have booted in the Theia frame
+//     first (else NOT SCORED): its document listeners must not take this paste
+//     (owner ruling 2026-11-17). Then a trusted middle-click on /a's strip tab closes /a
 //     (gone from the strip, the TabBar and the shell) while both detectors
 //     stay silent and /b stays current.
 //
@@ -156,21 +159,41 @@
 // that runs, not this file) and requires the scenario to go red naming it,
 // after an unplanted run of the same scenario went green.
 //
+// middle and Orca's document listeners (WINDOWS 62, harness-live-tabs-11): the paste control covers Orca's listeners only once the
+// pane bundle has booted in the frame, so the row decides from the frontend under test (the generated frontend of PB_BACKEND_MAIN, else
+// this tree's): an app that wires orca-panes must boot the bundle (a bundle that is built and does not boot is red, NOT SCORED); an
+// app that wires it while the bundle is not built runs the control without Orca's listeners, and the row says so
+// ("Orca listeners not covered") and exits 77 (SKIP) if nothing else failed. An app that wires no orca-panes has no such listeners.
+//
+// SKIP (SKIP-PROTOCOL.md): a run that skipped that clause prints one line "tab-strip-live: SKIP -- <reason>" and exits 77 once every
+// scenario passed; a failure wins.
+//
+// The live lock (scripts/lib/live-lock.mjs; SKIP-PROTOCOL.md, "The live lock"): the row calls holdLiveLock before it launches anything (--self-test too: it
+// boots browsers). It goes on without taking the lock only when /proc/locks shows the lock held by the driver's holder (PB_LIVE_LOCK_HOLDER: pid and
+// start ticks) or by an ancestor (flock <git common dir>/pb-live.lock node <row>); an inherited PB_LIVE_LOCK_HELD=1 with neither is a FAIL by name; with
+// nothing set it takes the lock itself and waits, naming the holder.
+//
 // Usage:
 //   node scripts/verify-tab-strip-live.mjs [--scenario menu,keyboard-menu,reorder,middle,double,drop,overflow,pin-restore,multi,preview,attention,bookmark-all,modes[,..]] [--self-test]
 //
-// Full tier only: the built binary, a fresh Theia build, a headless browser.
+// Full tier only: the built binary, a fresh Theia build, a headless browser. --self-test also launches the browser (it plants each
+// fault in the running page), so it is a full-tier row, not a quick one.
 
 import { newProfile, runCheck, withShell, withShellQuit } from './lib/ng-a-live.mjs';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { REPO_ROOT } from './lib/ng-a-live.mjs';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 import { activeWindow, captureShell } from './lib/pb-kwin.mjs';
 import { appNameExpr, focusTheiaFrame, keyRoute, osClientPointer, overlayVisibility, pointerRoute, pressKey, probe, waitForPush, withProbeShell } from './lib/pb-live-probe.mjs';
 
 const NAME = 'tab-strip-live';
+const PANE_BUNDLE_ENTRY = join(REPO_ROOT, 'orca/out/web/assets/pb-panes/pb-panes.js');
+/** Clauses that did not run because an input is absent: { scenario, reason } (SKIP-PROTOCOL.md). */
+const skips = [];
 
 // 39-16: PB_CAPTURE_DIR=<dir> runs the sessions headed and captures the shell at named states.
 const CAPTURE_DIR = process.env.PB_CAPTURE_DIR ? resolve(process.env.PB_CAPTURE_DIR) : '';
@@ -562,9 +585,34 @@ async function middle({ app, pages, expect, plant }) {
         document.body.appendChild(ed);
         S.framePaste = [];
         for (const type of ['input', 'paste']) ed.addEventListener(type, () => S.framePaste.push(type));
+        if (${JSON.stringify(plant)} === 'middle-foreign-paste') {
+            // The fault: a document listener that cancels the native middle-click paste into an editable and inserts its
+            // own text, as Orca's unscoped primary-selection hook did in this frame.
+            const hit = e => e.button === 1 && e.target instanceof Node && ed.contains(e.target);
+            document.addEventListener('mouseup', e => { if (!hit(e)) return; e.preventDefault(); e.stopImmediatePropagation(); ed.focus(); document.execCommand('insertText', false, 'pb-foreign-selection'); }, true);
+            document.addEventListener('auxclick', e => { if (hit(e)) { e.preventDefault(); e.stopImmediatePropagation(); } }, true);
+        }
         return { painted, a: rect(tabEl(S.a)), editable: rect(ed), bTab: byId(S.b).tabId };
     `);
     expect(setup.painted, 'middle: setup: /a and /b are not both painted in the strip');
+    // Owner ruling 2026-11-17: once booted, the Orca pane bundle has document listeners in this frame; the paste control
+    // below covers them only after the boot (a leaked Orca daemon holding its port once kept it from booting and hid them).
+    // Decided from the frontend under test, not from this tree's bundle: an app that wires orca-panes must boot it.
+    const orcaLib = await import('./lib/orca-tabs-live.mjs');
+    const wired = orcaLib.appWiresOrcaPanes();
+    const bundleBuilt = existsSync(PANE_BUNDLE_ENTRY);
+    const booted = wired === true
+        ? (await step(app, 'middle: Orca pane bundle', `return await until(() => { const m = globalThis[Symbol.for('powerbrowser.orca-panes.module')]; return !!m && m.state().booted; }, ${bundleBuilt ? 120000 : 20000});`)) === true
+        : false;
+    const coverage = orcaLib.listenerCoverage({ wired, bundleBuilt, booted });
+    if (coverage.verdict === 'red') {
+        expect(false, `middle: ${coverage.reason}`);
+    } else if (coverage.verdict === 'skip') {
+        console.log(`${NAME}: middle: ${coverage.reason}`);
+        skips.push({ scenario: 'middle', reason: coverage.reason });
+    } else if (coverage.note) {
+        console.log(`${NAME}: middle: ${coverage.note}`);
+    }
     // The recorder's own positive control: it saw /b's state push.
     expect(await waitForPush(app, push => push && push.tabId === setup.bTab) >= 0, 'middle: NOT SCORED -- the push recorder holds no push for /b, so it is not recording');
     const overlay = (await app.contexts()).find(c => c.url === urls.b)?.context;
@@ -594,11 +642,15 @@ async function middle({ app, pages, expect, plant }) {
     const sentinel = `pb-strip-sentinel-${Date.now()}`;
     const clip = await setSelection(app, sentinel);
     expect(clip === 'ok', `middle: NOT SCORED -- the selection clipboard could not be written (${clip})`);
+    // A BiDi click moves no chrome focus: while the page overlay holds it, Gecko fires the frame editable's paste event
+    // but inserts nothing, so the frame is focused first, as a real click would focus it.
+    expect(await focusTheiaFrame(app) === true, 'middle: NOT SCORED -- chrome focus could not be put on the Theia frame');
     await pointer(app, theia, middleClick(setup.editable.x, setup.editable.y));
     await pointer(app, overlay, middleClick(pageEditable.x, pageEditable.y));
-    const controls = await step(app, 'middle: positive controls', 'return { frame: S.framePaste.slice() };');
+    const controls = await step(app, 'middle: positive controls', "return { frame: S.framePaste.slice(), text: document.getElementById('pb-paste-frame').textContent };");
     const pageControl = await pagePaste();
     expect(controls.frame.length > 0, 'middle: NOT SCORED -- the Theia-frame detector caught no paste from a real middle-click into its editable');
+    expect(controls.frame.length === 0 || controls.text.trim() === sentinel, `middle: the middle-click paste into the Theia-frame editable inserted ${JSON.stringify(controls.text)}, not the system selection ${JSON.stringify(sentinel)}`);
     expect(pageControl.length > 0, 'middle: NOT SCORED -- the page-realm detector caught no paste from a real middle-click into its editable');
 
     // The claim: middle-click on /a's strip tab closes /a and pastes nowhere.
@@ -1497,7 +1549,10 @@ const SCENARIOS = {
     menu: { run: menu, plant: 'menu-acts-on-current', expect: 'reloaded the current tab' },
     'keyboard-menu': { run: keyboardMenu, probe: true, plant: 'keyboard-menu-pointer-origin', expect: 'keyboard tab menu opened away from the focused tab' },
     reorder: { run: reorder, probe: true, plant: 'reorder-noop', expect: 'did not land after /b' },
-    middle: { run: middle, probe: true, prefs: { 'middlemouse.paste': true }, plant: 'middle-not-closing', expect: 'did not close /a' },
+    middle: { run: middle, probe: true, prefs: { 'middlemouse.paste': true }, plants: [
+        { plant: 'middle-not-closing', expect: 'did not close /a' },
+        { plant: 'middle-foreign-paste', expect: 'not the system selection' },
+    ] },
     double: { run: double, probe: true, plants: [
         { plant: 'double-noop', expect: 'opened no new tab' },
         { plant: 'strip-drag-handle', expect: 'a window-drag handle covers the empty strip' },
@@ -1537,13 +1592,31 @@ if (unknown.length || chosen.length === 0) {
     process.exit(2);
 }
 
-await runCheck(`verify-${NAME}${selfTest ? ' --self-test' : ''}`, async ({ pages, expect, failures }) => {
+// The live lock before anything launches (scripts/lib/live-lock.mjs); --self-test launches browsers too.
+{
+    const { holdLiveLock } = await import('./lib/live-lock.mjs');
+    const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
+    if (locked !== null) process.exit(locked);
+}
+
+const checkName = `verify-${NAME}${selfTest ? ' --self-test' : ''}`;
+// runCheck prints its own PASS line; a run with a skipped clause is not a PASS, so that line is held back and the SKIP line printed instead.
+const realLog = console.log;
+console.log = (...a) => { if (skips.length && a.length === 1 && a[0] === `${checkName}: PASS`) return; realLog(...a); };
+await runCheck(checkName, async ({ pages, expect, failures }) => {
+    if (selfTest) {
+        const lib = await import('./lib/orca-tabs-live.mjs');
+        const liveLock = await import('./lib/live-lock.mjs');
+        for (const f of liveLock.lockWiringFails(NAME, import.meta.url)) expect(false, f);
+        expect(lib.lockWiringPlantFails(liveLock.lockWiringFails).length > 0, 'a script without the lock call was not caught by lockWiringFails');
+    }
     for (const name of chosen) {
         const scenario = SCENARIOS[name];
         await launch(scenario, name, { pages, expect });
         if (!selfTest || failures.length || scenario.captureOnly) {
             if (!failures.length) {
-                console.log(`${NAME}: ${name}: PASS`);
+                const partial = skips.filter((x) => x.scenario === name);
+                console.log(`${NAME}: ${name}: PASS${partial.length ? ` (partial: ${[...new Set(partial.map((x) => x.reason))].join('; ')})` : ''}`);
             }
             continue;
         }
@@ -1560,3 +1633,8 @@ await runCheck(`verify-${NAME}${selfTest ? ' --self-test' : ''}`, async ({ pages
         }
     }
 });
+console.log = realLog;
+if (skips.length) {
+    console.log(skipLine(NAME, [...new Set(skips.map((x) => `${x.scenario}: ${x.reason}`))].join('; ')));
+    process.exit(SKIP_EXIT);
+}

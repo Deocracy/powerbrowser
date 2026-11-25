@@ -92,7 +92,8 @@ function deriveReaders(sources) {
 }
 
 function callPattern(reader) {
-    if (reader.kind === 'method') return new RegExp(`PowerBrowserAPI\\.${reader.name}\\(`);
+    // PowerBrowserProcesses is the second boundary object exported from the same file (Phase 62).
+    if (reader.kind === 'method') return new RegExp(`(?:PowerBrowserAPI|PowerBrowserProcesses)\\.${reader.name}\\(`);
     if (reader.kind === 'function') return new RegExp(`(?<![\\w$.])${reader.name}\\(`);
     return new RegExp(`(?<!PowerBrowserAPI)\\.${reader.name}\\(`);
 }
@@ -164,6 +165,11 @@ const FIXTURE = {
         '    return PowerBrowserAPI.readOnlyByDead();',
         '  },',
         '});',
+        'export const PowerBrowserProcesses = Object.freeze({',
+        '  listUsedByProcesses() {',
+        '    return 5;',
+        '  },',
+        '});',
         'function searchUsed() {',
         '  return 3;',
         '}',
@@ -186,6 +192,7 @@ const FIXTURE = {
         '}',
     ].join('\n'),
     'theia/extensions/modes/src/browser/caller.ts': 'export const use = (svc: { getUsed(): number }) => svc.getUsed();',
+    'powerbrowser/shell/ProcessCaller.sys.mjs': 'export const n = PowerBrowserProcesses.listUsedByProcesses();',
     'scripts/verify-something.mjs': 'svc.getUnused();',
 };
 
@@ -201,6 +208,8 @@ function selfTest() {
     }
     const noCaller = { ...FIXTURE, 'theia/extensions/modes/src/browser/caller.ts': 'export const use = 1;' };
     if (!(names(analyze(filterSources(noCaller))) ?? []).includes('getUsed')) problems.push('removing the only call site of getUsed did not turn it red');
+    const noProcCaller = { ...FIXTURE, 'powerbrowser/shell/ProcessCaller.sys.mjs': 'export const n = 0;' };
+    if (!(names(analyze(filterSources(noProcCaller))) ?? []).includes('listUsedByProcesses')) problems.push('removing the only PowerBrowserProcesses call site did not turn its reader red');
     const planted = { ...FIXTURE, [PBA_REL]: FIXTURE[PBA_REL].replace('Object.freeze({', 'Object.freeze({\n  readPlanted() {\n    return 0;\n  },') };
     if (planted[PBA_REL] === FIXTURE[PBA_REL]) problems.push('the planted reader did not land');
     if (!(names(analyze(filterSources(planted))) ?? []).includes('readPlanted')) problems.push('a planted uncalled reader stayed green');
@@ -230,7 +239,7 @@ function selfTest() {
         for (const p of problems) console.error(`  - ${p}`);
         return 1;
     }
-    console.log(`${NAME} --self-test: PASS -- control found exactly the planted dead readers; a removed call site, a planted reader, a module function shadowed by a same-named .ts method, an empty scan and each half scanning zero readers each went red`);
+    console.log(`${NAME} --self-test: PASS -- control found exactly the planted dead readers; a removed call site (PowerBrowserAPI and PowerBrowserProcesses), a planted reader, a module function shadowed by a same-named .ts method, an empty scan and each half scanning zero readers each went red`);
     return 0;
 }
 

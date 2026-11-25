@@ -1,0 +1,244 @@
+{
+  "bundle": "esm",
+  "startedAt": "2026-11-10T17:50:20.847Z",
+  "theiaBuild": "/home/chris/orca/workspaces/Power-Browser/p61-01/theia/applications/browser/lib/backend/main.js",
+  "repoStatus": "UU README.md",
+  "load": {
+    "loadMs": 728,
+    "reactCopies": 1,
+    "reactVersion": "19.2.8",
+    "theiaReact": "19.2.8",
+    "esmFilesFetchedAtBoot": 132
+  },
+  "initial": {
+    "activeWorktreeId": null,
+    "visibility": "visible",
+    "tabs": 0
+  },
+  "cli": [
+    {
+      "label": "T1 no active worktree",
+      "becameTab": true,
+      "ms": 402,
+      "activeWorktreeId": "null",
+      "visibility": "visible",
+      "hostTerminalHandles": 1,
+      "tabsNow": 1,
+      "executionHostIds": [
+        "runtime:web-d8779278-e3ab-446b-b842-4566aec7524d"
+      ]
+    },
+    {
+      "label": "T2 active worktree set",
+      "becameTab": true,
+      "ms": 363,
+      "activeWorktreeId": "set",
+      "visibility": "visible",
+      "hostTerminalHandles": 2,
+      "tabsNow": 2,
+      "executionHostIds": [
+        "runtime:web-d8779278-e3ab-446b-b842-4566aec7524d"
+      ]
+    },
+    {
+      "label": "T3 after a store-created terminal (spike Route A sequence)",
+      "becameTab": false,
+      "ms": null,
+      "activeWorktreeId": "set",
+      "visibility": "visible",
+      "hostTerminalHandles": 4,
+      "tabsNow": 3,
+      "executionHostIds": [
+        "runtime:web-d8779278-e3ab-446b-b842-4566aec7524d"
+      ]
+    },
+    {
+      "label": "T4 a web tab is current",
+      "becameTab": false,
+      "ms": null,
+      "activeWorktreeId": "set",
+      "visibility": "visible",
+      "hostTerminalHandles": 5,
+      "tabsNow": 3,
+      "executionHostIds": [
+        "runtime:web-d8779278-e3ab-446b-b842-4566aec7524d"
+      ]
+    },
+    {
+      "label": "T5 web tab closed again",
+      "becameTab": false,
+      "ms": null,
+      "activeWorktreeId": "set",
+      "visibility": "visible",
+      "hostTerminalHandles": 6,
+      "tabsNow": 3,
+      "executionHostIds": [
+        "runtime:web-d8779278-e3ab-446b-b842-4566aec7524d"
+      ]
+    }
+  ],
+  "created": {
+    "simulatorTab": "e29b58bf-1677-4455-87a4-80333e4d60b6",
+    "conflictReviewFile": "53a90111-a6cb-476e-9704-5507a80d91e0::/home/chris/orca/workspaces/Power-Browser/p61-01/.mozbuild/p64-probe/repo::conflict-review",
+    "checkDetailsFile": "53a90111-a6cb-476e-9704-5507a80d91e0::/home/chris/orca/workspaces/Power-Browser/p61-01/.mozbuild/p64-probe/repo::check-details@runtime:web-d8779278-e3ab-446b-b842-4566aec7524d::name:pb-probe check",
+    "mobileEmulatorEnabled": true
+  },
+  "mounts": [
+    {
+      "kind": "terminal",
+      "tabId": "web-terminal-ca4e0f3a-475f-4064-87c0-fe0bb5303a3b",
+      "rendered": true,
+      "elements": 84,
+      "w": 1280,
+      "h": 695,
+      "text": "direnv: error /home/chris/orca/workspaces/Power-Browser/p61-01/.envrc is blocked. Run `direnv allow` to approve its cont ent orca-ide-1.4.255-fhsenv:chris@legion:~/orca/workspaces/Power-Browser/p61-01/.mozbuild/p64-probe/repo$",
+      "markers": {
+        "xterm": 1,
+        "emulator": 0,
+        "textarea": 1,
+        "monaco": 0,
+        "probeState": null
+      },
+      "reactErrors": [],
+      "windowErrors": [],
+      "bodyPortals": 0
+    },
+    {
+      "kind": "agent-session",
+      "tabId": "pb-probe-chat-tab",
+      "rendered": true,
+      "elements": 45,
+      "w": 1280,
+      "h": 695,
+      "text": "Orca can't find this chat. This chat's history couldn't be loaded. Start a new chat to continue. Model",
+      "markers": {
+        "xterm": 0,
+        "emulator": 0,
+        "textarea": 1,
+        "monaco": 0,
+        "probeState": null
+      },
+      "reactErrors": [],
+      "windowErrors": [],
+      "bodyPortals": 0
+    },
+    {
+      "kind": "simulator",
+      "tabId": "e29b58bf-1677-4455-87a4-80333e4d60b6",
+      "rendered": true,
+      "elements": 45,
+      "w": 1280,
+      "h": 695,
+      "text": "Mobile Emulator Not connected Choose emulator Rotate Connect No emulator devices found. Add an iOS Simulator in Xcode, or an Android Virtual Device in Android Studio. No emulator connected Emulator preview Agent control is ready. Done",
+      "markers": {
+        "xterm": 0,
+        "emulator": 1,
+        "textarea": 0,
+        "monaco": 0,
+        "probeState": null
+      },
+      "reactErrors": [],
+      "windowErrors": [],
+      "bodyPortals": 0
+    },
+    {
+      "kind": "conflict-review",
+      "tabId": "53a90111-a6cb-476e-9704-5507a80d91e0::/home/chris/orca/workspaces/Power-Browser/p61-01/.mozbuild/p64-probe/repo::conflict-review",
+      "rendered": true,
+      "elements": 28,
+      "w": 1280,
+      "h": 695,
+      "text": "Conflict Review Worktree path copied All conflicts resolved This review snapshot no longer has any live unresolved conflicts. Source Control Dismiss",
+      "markers": {
+        "xterm": 0,
+        "emulator": 0,
+        "textarea": 0,
+        "monaco": 0,
+        "probeState": null
+      },
+      "reactErrors": [],
+      "windowErrors": [],
+      "bodyPortals": 0
+    },
+    {
+      "kind": "check-details",
+      "tabId": "53a90111-a6cb-476e-9704-5507a80d91e0::/home/chris/orca/workspaces/Power-Browser/p61-01/.mozbuild/p64-probe/repo::check-details@runtime:web-d8779278-e3ab-446b-b842-4566aec7524d::name:pb-probe check",
+      "rendered": true,
+      "elements": 26,
+      "w": 1280,
+      "h": 695,
+      "text": "pb-probe check Fix with AI Refresh Status: Failed pb-probe: no hosted review in this run",
+      "markers": {
+        "xterm": 0,
+        "emulator": 0,
+        "textarea": 0,
+        "monaco": 0,
+        "probeState": null
+      },
+      "reactErrors": [],
+      "windowErrors": [],
+      "bodyPortals": 0
+    }
+  ],
+  "final": {
+    "ready": true,
+    "activeWorktreeId": "53a90111-a6cb-476e-9704-5507a80d91e0::/home/chris/orca/workspaces/Power-Browser/p61-01/.mozbuild/p64-probe/repo",
+    "visibility": "visible",
+    "worktrees": 1,
+    "terminals": 6,
+    "tabs": [
+      {
+        "contentType": "simulator",
+        "executionHostId": "runtime:<env>"
+      },
+      {
+        "contentType": "conflict-review",
+        "executionHostId": "runtime:<env>"
+      },
+      {
+        "contentType": "check-details",
+        "executionHostId": "runtime:<env>"
+      },
+      {
+        "contentType": "terminal",
+        "executionHostId": "runtime:<env>"
+      },
+      {
+        "contentType": "terminal",
+        "executionHostId": "runtime:<env>"
+      },
+      {
+        "contentType": "terminal",
+        "executionHostId": "runtime:<env>"
+      },
+      {
+        "contentType": "terminal",
+        "executionHostId": "runtime:<env>"
+      },
+      {
+        "contentType": "terminal",
+        "executionHostId": "runtime:<env>"
+      },
+      {
+        "contentType": "terminal",
+        "executionHostId": "runtime:<env>"
+      }
+    ],
+    "openFiles": [
+      {
+        "id": "53a90111-a6cb-476e-9704-5507a80d91e0::/home/chris/orca/workspaces/Power-Browser/p61-01/.mozbuild/p64-probe/repo::conflict-review",
+        "mode": "conflict-review",
+        "worktreeId": "53a90111-a6cb-476e-9704-5507a80d91e0::/home/chris/orca/workspaces/Power-Browser/p61-01/.mozbuild/p64-probe/repo"
+      },
+      {
+        "id": "53a90111-a6cb-476e-9704-5507a80d91e0::/home/chris/orca/workspaces/Power-Browser/p61-01/.mozbuild/p64-probe/repo::check-details@runtime:web-d8779278-e3ab-446b-b842-4566aec7524d::name:pb-probe check",
+        "mode": "check-details",
+        "worktreeId": "53a90111-a6cb-476e-9704-5507a80d91e0::/home/chris/orca/workspaces/Power-Browser/p61-01/.mozbuild/p64-probe/repo"
+      }
+    ],
+    "mobileEmulatorEnabled": true
+  },
+  "orcadSurvivors": 0,
+  "finishedAt": "2026-11-10T17:51:56.184Z",
+  "verdict": "DONE"
+}

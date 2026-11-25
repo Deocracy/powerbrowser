@@ -1,0 +1,543 @@
+{
+  "date": "2026-11-10T18:09:01.795Z",
+  "dpr": 2,
+  "withOrca": false,
+  "q3": {
+    "actor": "registered",
+    "focusUserOverlay": true,
+    "focusUserInput": "in",
+    "agentLoadedPush": true,
+    "current": {},
+    "overlayAtOpen": {
+      "user": {
+        "visibility": "visible",
+        "width": "683px",
+        "height": "311px",
+        "active": true,
+        "chromeFocused": true
+      },
+      "agent": {
+        "visibility": "hidden",
+        "width": "0px",
+        "height": "0px",
+        "active": false,
+        "chromeFocused": false
+      }
+    },
+    "agentStateAtOpen": {
+      "active": "body",
+      "hasFocus": false,
+      "visibility": "hidden",
+      "inner": [
+        0,
+        0
+      ],
+      "dpr": 2,
+      "target": {
+        "x": 100,
+        "y": 80,
+        "w": 40,
+        "h": 40
+      },
+      "hit": null,
+      "value": "",
+      "log": [],
+      "result": null,
+      "console": []
+    },
+    "before": {
+      "chromeActiveTabId": "wt-vn9hc6-1",
+      "user": {
+        "active": "in",
+        "hasFocus": true,
+        "visibility": "visible",
+        "inner": [
+          683,
+          311
+        ],
+        "dpr": 2,
+        "target": null,
+        "hit": null,
+        "value": "",
+        "log": [
+          {
+            "type": "focus",
+            "trusted": true,
+            "target": "#document"
+          },
+          {
+            "type": "focus",
+            "trusted": true,
+            "target": "window"
+          },
+          {
+            "type": "focus",
+            "trusted": true,
+            "target": "in"
+          }
+        ],
+        "result": null,
+        "console": []
+      }
+    },
+    "variants": {
+      "neverShown": {
+        "setup": {
+          "visibility": "hidden",
+          "width": "0px",
+          "height": "0px",
+          "active": false,
+          "chromeFocused": false
+        },
+        "overlay": {
+          "visibility": "hidden",
+          "width": "0px",
+          "height": "0px",
+          "active": false,
+          "chromeFocused": false
+        },
+        "agent": {
+          "inner": [
+            0,
+            0
+          ],
+          "dpr": 2,
+          "target": {
+            "x": 100,
+            "y": 80,
+            "w": 40,
+            "h": 40
+          },
+          "visibility": "hidden",
+          "hasFocus": false
+        },
+        "hitAtTargetCenter": null,
+        "chromeTopAtTargetCenter": "wt-vn9hc6-1",
+        "pointerEvents": [
+          "pointermove:#document:true:120,100",
+          "pointerdown:#document:true:120,100",
+          "mousedown:#document:true:120,100",
+          "pointerup:#document:true:120,100",
+          "mouseup:#document:true:120,100",
+          "wheel:#document:true:120,100"
+        ],
+        "clickHitTarget": false,
+        "focusInput": "",
+        "keySend": "sent",
+        "insert": true,
+        "inputValue": "",
+        "keyEvents": [
+          "keydown:BODY:true:a",
+          "keyup:BODY:true:a",
+          "keydown:BODY:true:b",
+          "keyup:BODY:true:b"
+        ],
+        "focus": {
+          "chromeActiveBefore": "wt-vn9hc6-1",
+          "chromeActiveAfter": "wt-vn9hc6-1",
+          "userActiveBefore": "in",
+          "userActiveAfter": "in",
+          "userHasFocusBefore": true,
+          "userHasFocusAfter": true,
+          "userBlurred": [],
+          "agentHasFocusAfter": false,
+          "agentActiveAfter": "body"
+        },
+        "screenshot": {
+          "size": [
+            600,
+            600
+          ],
+          "px": [
+            {
+              "name": "targetCenter",
+              "x": 240,
+              "y": 200,
+              "rgba": [
+                255,
+                0,
+                0,
+                255
+              ]
+            },
+            {
+              "name": "targetInsideEdge",
+              "x": 204,
+              "y": 164,
+              "rgba": [
+                255,
+                0,
+                0,
+                255
+              ]
+            },
+            {
+              "name": "outsideLeft",
+              "x": 194,
+              "y": 200,
+              "rgba": [
+                255,
+                255,
+                255,
+                255
+              ]
+            }
+          ]
+        }
+      },
+      "shownThenHidden": {
+        "setup": {
+          "shown": true,
+          "back": true,
+          "sizeWhileShown": [
+            683,
+            311
+          ]
+        },
+        "overlay": {
+          "visibility": "hidden",
+          "width": "0px",
+          "height": "0px",
+          "active": false,
+          "chromeFocused": false
+        },
+        "agent": {
+          "inner": [
+            683,
+            311
+          ],
+          "dpr": 2,
+          "target": {
+            "x": 100,
+            "y": 80,
+            "w": 40,
+            "h": 40
+          },
+          "visibility": "hidden",
+          "hasFocus": false
+        },
+        "hitAtTargetCenter": "t",
+        "chromeTopAtTargetCenter": "wt-vn9hc6-1",
+        "pointerEvents": [
+          "pointermove:t:true:120,100",
+          "pointerdown:t:true:120,100",
+          "mousedown:t:true:120,100",
+          "pointerup:t:true:120,100",
+          "mouseup:t:true:120,100",
+          "click:t:true:120,100",
+          "wheel:t:true:120,100"
+        ],
+        "clickHitTarget": true,
+        "focusInput": "",
+        "keySend": "sent",
+        "insert": true,
+        "inputValue": "",
+        "keyEvents": [
+          "keydown:BODY:true:a",
+          "keyup:BODY:true:a",
+          "keydown:BODY:true:b",
+          "keyup:BODY:true:b"
+        ],
+        "focus": {
+          "chromeActiveBefore": "wt-vn9hc6-1",
+          "chromeActiveAfter": "wt-vn9hc6-1",
+          "userActiveBefore": "in",
+          "userActiveAfter": "in",
+          "userHasFocusBefore": true,
+          "userHasFocusAfter": true,
+          "userBlurred": [],
+          "agentHasFocusAfter": false,
+          "agentActiveAfter": "body"
+        },
+        "screenshot": {
+          "size": [
+            600,
+            600
+          ],
+          "px": [
+            {
+              "name": "targetCenter",
+              "x": 240,
+              "y": 200,
+              "rgba": [
+                255,
+                0,
+                0,
+                255
+              ]
+            },
+            {
+              "name": "targetInsideEdge",
+              "x": 204,
+              "y": 164,
+              "rgba": [
+                255,
+                0,
+                0,
+                255
+              ]
+            },
+            {
+              "name": "outsideLeft",
+              "x": 194,
+              "y": 200,
+              "rgba": [
+                255,
+                255,
+                255,
+                255
+              ]
+            }
+          ]
+        }
+      },
+      "occludedVisible": {
+        "setup": {
+          "zIndex": "-1",
+          "visibility": "visible",
+          "active": false
+        },
+        "overlay": {
+          "visibility": "visible",
+          "width": "683px",
+          "height": "311px",
+          "active": false,
+          "chromeFocused": false
+        },
+        "agent": {
+          "inner": [
+            683,
+            311
+          ],
+          "dpr": 2,
+          "target": {
+            "x": 100,
+            "y": 80,
+            "w": 40,
+            "h": 40
+          },
+          "visibility": "hidden",
+          "hasFocus": false
+        },
+        "hitAtTargetCenter": "t",
+        "chromeTopAtTargetCenter": "wt-vn9hc6-1",
+        "pointerEvents": [
+          "pointermove:t:true:120,100",
+          "pointerdown:t:true:120,100",
+          "mousedown:t:true:120,100",
+          "pointerup:t:true:120,100",
+          "mouseup:t:true:120,100",
+          "click:t:true:120,100",
+          "wheel:t:true:120,100"
+        ],
+        "clickHitTarget": true,
+        "focusInput": "in",
+        "keySend": "sent",
+        "insert": true,
+        "inputValue": "abxyz",
+        "keyEvents": [
+          "keydown:in:true:a",
+          "beforeinput:in:true:",
+          "input:in:true:",
+          "keyup:in:true:a",
+          "keydown:in:true:b",
+          "beforeinput:in:true:",
+          "input:in:true:",
+          "keyup:in:true:b",
+          "beforeinput:in:true:",
+          "input:in:true:"
+        ],
+        "focus": {
+          "chromeActiveBefore": "wt-vn9hc6-1",
+          "chromeActiveAfter": "wt-vn9hc6-1",
+          "userActiveBefore": "in",
+          "userActiveAfter": "in",
+          "userHasFocusBefore": true,
+          "userHasFocusAfter": true,
+          "userBlurred": [],
+          "agentHasFocusAfter": false,
+          "agentActiveAfter": "in"
+        },
+        "screenshot": {
+          "size": [
+            600,
+            600
+          ],
+          "px": [
+            {
+              "name": "targetCenter",
+              "x": 240,
+              "y": 200,
+              "rgba": [
+                255,
+                0,
+                0,
+                255
+              ]
+            },
+            {
+              "name": "targetInsideEdge",
+              "x": 204,
+              "y": 164,
+              "rgba": [
+                255,
+                0,
+                0,
+                255
+              ]
+            },
+            {
+              "name": "outsideLeft",
+              "x": 194,
+              "y": 200,
+              "rgba": [
+                255,
+                255,
+                255,
+                255
+              ]
+            }
+          ]
+        }
+      }
+    }
+  },
+  "q4": {
+    "screenshotHiddenOverlay": {
+      "size": [
+        600,
+        600
+      ],
+      "px": [
+        {
+          "name": "targetCenter",
+          "x": 240,
+          "y": 200,
+          "rgba": [
+            255,
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "name": "targetInsideEdge",
+          "x": 204,
+          "y": 164,
+          "rgba": [
+            255,
+            0,
+            0,
+            255
+          ]
+        },
+        {
+          "name": "outsideLeft",
+          "x": 194,
+          "y": 200,
+          "rgba": [
+            255,
+            255,
+            255,
+            255
+          ]
+        }
+      ]
+    },
+    "clickThroughChild": {
+      "neverShown": false,
+      "shownThenHidden": true,
+      "occludedVisible": true
+    }
+  },
+  "q5": {
+    "rows": [
+      {
+        "kind": "alert",
+        "appearedMs": 253,
+        "facts": {
+          "promptType": "alert",
+          "modalType": 3,
+          "body": "p66 alert",
+          "ownerTabId": "wt-vn9hc6-2",
+          "shellInputEnabled": false
+        },
+        "roundTrip": {
+          "ok": true,
+          "kind": "webTabNavigate",
+          "where": "loading"
+        },
+        "roundTripMs": 5,
+        "answered": "answered",
+        "pageResult": "returned",
+        "after": null
+      },
+      {
+        "kind": "confirm",
+        "appearedMs": 758,
+        "facts": {
+          "promptType": "confirm",
+          "modalType": 3,
+          "body": "p66 confirm",
+          "ownerTabId": "wt-vn9hc6-2",
+          "shellInputEnabled": false
+        },
+        "roundTrip": {
+          "ok": true,
+          "kind": "webTabNavigate",
+          "where": "loading"
+        },
+        "roundTripMs": 5,
+        "answered": "answered",
+        "pageResult": false,
+        "after": null
+      },
+      {
+        "kind": "prompt",
+        "appearedMs": 757,
+        "facts": {
+          "promptType": "prompt",
+          "modalType": 3,
+          "body": "p66 prompt",
+          "ownerTabId": "wt-vn9hc6-2",
+          "shellInputEnabled": false
+        },
+        "roundTrip": {
+          "ok": true,
+          "kind": "webTabNavigate",
+          "where": "loading"
+        },
+        "roundTripMs": 6,
+        "answered": "answered",
+        "pageResult": "p66-text",
+        "after": null
+      }
+    ]
+  },
+  "console": {
+    "listen": true,
+    "captured": [
+      {
+        "level": "log",
+        "args": [
+          "p66 log",
+          "42"
+        ]
+      },
+      {
+        "level": "warn",
+        "args": [
+          "p66 warn"
+        ]
+      },
+      {
+        "level": "error",
+        "args": [
+          "p66 err"
+        ]
+      }
+    ]
+  },
+  "orca": {},
+  "notes": []
+}

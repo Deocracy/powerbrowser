@@ -223,6 +223,46 @@ const tests = [
         },
     },
     {
+        // Same-run control as the off test: the control proves the interval flush delivers.
+        name: 'events queued before the level drops to off are not sent',
+        run: async () => {
+            const t = makeSender({ level: 'error', sender: { maxBatchSize: 100, flushIntervalMs: 1000 } });
+            try {
+                t.sender.sendErrorData(new Error('queued-while-error'));
+                await drain();
+                assert(t.fetch.calls.length === 0, `event flushed before the interval (${t.fetch.calls.length} POST(s))`);
+                t.setLevel('off');
+                t.clock.advance(1000);
+                await drain();
+                assert(t.fetch.calls.length === 0, `off delivered an event queued earlier (${t.fetch.calls.length} POST(s))`);
+                t.setLevel('error');
+                t.sender.sendErrorData(new Error('control.error'));
+                t.clock.advance(1000);
+                await drain();
+                assert(t.fetch.calls.length === 1 && t.fetch.calls[0].body.events.length === 1, `control delivered ${JSON.stringify(t.fetch.calls.map(c => c.body))}, want one event`);
+            } finally {
+                t.sender.dispose();
+            }
+        },
+    },
+    {
+        name: 'a failed batch is not retried after the level drops to off',
+        run: async () => {
+            const t = makeSender({ level: 'error', sender: { maxBatchSize: 1, flushIntervalMs: 0, maxAttempts: 3, baseDelayMs: 100 }, script: [{ ok: false }] });
+            try {
+                t.sender.sendErrorData(new Error('boom'));
+                await drain();
+                assert(t.fetch.calls.length === 1 && t.fetch.calls[0].body.events?.length === 1, `first try produced ${JSON.stringify(t.fetch.calls.map(c => c.body))}, want one POST of one event`);
+                t.setLevel('off');
+                t.clock.advance(100000);
+                await drain();
+                assert(t.fetch.calls.length === 1, `off retried a failed batch (${t.fetch.calls.length} POST(s))`);
+            } finally {
+                t.sender.dispose();
+            }
+        },
+    },
+    {
         // Crash-ping half of the TEL-04 separation: error events at the
         // crash level ride the ping sender to the telemetry endpoint as a
         // JSON batch -- the same transport every other ping uses.

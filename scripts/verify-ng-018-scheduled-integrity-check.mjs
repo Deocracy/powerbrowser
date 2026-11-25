@@ -20,6 +20,9 @@ await runCheck('verify-ng-018-scheduled-integrity-check', async ({ expect }) => 
     let quarantined;
     await withShell(profile, async () => {
         quarantined = await waitUntil(() => existsSync(`${path}.corrupt-1`), 45000);
+        // The forensic copy lands before the rebuild migrates the new store (quarantineAndRebuildTabStore);
+        // a shell torn down in between leaves the rebuild to the next launch (NG-085). Wait for the head.
+        if (quarantined) await waitUntil(() => readStore(path).version === schemaHead(), 30000);
     });
     expect(quarantined, 'no scheduled integrity_check quarantined a store whose index disagrees with its table within 45s (the startup quick_check cannot see this fault)');
     if (quarantined) {

@@ -57,3 +57,20 @@ pref("extensions.cookies.hidden", "POWERBROWSER_TOKEN@127.0.0.1");
 // PowerBrowserAPI.setGroupSenderPort writes the live value on the default
 // branch: the sidecar origin and its per-webview subdomains on localhost (38-07).
 pref("extensions.webRequest.hiddenOrigins", "");
+
+// Phase 62 (P62-16): defaults for the orcad supervisor (OrcaService.sys.mjs).
+// The port is fixed, not chosen at spawn: 26768, because Orca's own 6768 is
+// held by a running Orca desktop on developer hosts, and 26768 is below the
+// Linux ephemeral range, so no outgoing connection can take it first. A busy
+// port is a start failure; tests override it in a profile's user.js.
+// killGraceMs is longer than the sidecar's because orcad's own stop deadline
+// is 15 s. root follows backendMain: the dev tree, substituted at build time.
+pref("powerbrowser.orca.root", "@POWERBROWSER_DEV_TREE@/orca");
+pref("powerbrowser.orca.port", 26768);
+pref("powerbrowser.orca.startupTimeoutMs", 60000);
+pref("powerbrowser.orca.killGraceMs", 16000);
+pref("powerbrowser.orca.giveUpAttempts", 5);
+// Audit fix orcad-hosting-07: giveUpAttempts exits after ready within this window end in the
+// failed state (with its Restart) instead of restarting orcad without limit.
+pref("powerbrowser.orca.crashWindowMs", 300000);
+pref("powerbrowser.orca.logBufferLines", 200);

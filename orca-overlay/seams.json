@@ -1,0 +1,74 @@
+{
+  "seams": [
+    {
+      "patch": "patches/010-installed-electron-switch.patch",
+      "path": "src/main/orcad/orcad-browser-provider.ts",
+      "reason": "RUN-04, D-10: no installed Orca desktop is launched as a hidden Electron browser when PowerBrowser sets ORCA_DISABLE_INSTALLED_ELECTRON_BROWSER=1; the browser-provider seam D-16 names (P62-14)",
+      "upstream": {
+        "class": "browser-provider",
+        "pr": null
+      },
+      "upstream_blob": "90b79e505d8db41a8cf61cb45dd41f36658a6966"
+    },
+    {
+      "patch": "patches/070-claude-agent-sdk-dir.patch",
+      "path": "src/main/claude/claude-stream-json-connection.ts",
+      "reason": "BEXT-01, D-30: orcad loads the Claude agent SDK from the directory ORCA_CLAUDE_AGENT_SDK_DIR names, an empty value meaning none; generic, no PowerBrowser token (P68-38)",
+      "upstream": {
+        "class": "pb-only",
+        "pr": null
+      },
+      "upstream_blob": "2d2c395d91a4e5654bbb5521d9403ea3081956f0"
+    },
+    {
+      "patch": "patches/080-orcad-external-claude-agent-sdk.patch",
+      "path": "config/scripts/orcad-entry-build.mjs",
+      "reason": "BEXT-01, D-30: the Claude agent SDK stays out of orcad's bundle; it ships in a removable Theia extension (P68-38)",
+      "upstream": {
+        "class": "pb-only",
+        "pr": null
+      },
+      "upstream_blob": "d73f842d6358d69267e5dc2704ad12b60d6fc074"
+    },
+    {
+      "patch": "patches/090-agent-local-icon.patch",
+      "path": "src/renderer/src/lib/agent-catalog.tsx",
+      "reason": "D-62 (Chris, 2026-11-23): no request goes to Google's favicon service; an agent with no bundled icon shows its letter icon",
+      "upstream": {
+        "class": "pb-only",
+        "pr": null
+      },
+      "upstream_blob": "fee7a07d89c1638c8bf3416a333647aae48d059e"
+    },
+    {
+      "patch": "patches/100-open-in-app-local-icon.patch",
+      "path": "src/renderer/src/lib/open-in-app-catalog.tsx",
+      "reason": "D-62 (Chris, 2026-11-23): no request goes to Google's favicon service; an Open-in application shows the generic window icon",
+      "upstream": {
+        "class": "pb-only",
+        "pr": null
+      },
+      "upstream_blob": "648d6fba9352ad59c004f47a37bf630c4adcd482"
+    },
+    {
+      "patch": "patches/110-repo-icon-no-autodetect-favicon.patch",
+      "path": "src/main/repository-icons/repo-icon-autodetect.ts",
+      "reason": "D-62 (Chris, 2026-11-23): no request goes to Google's favicon service; a repository homepage no longer becomes a favicon address. src/shared/repo-icon.ts is shared with the mobile app and stays untouched (OVL-03)",
+      "upstream": {
+        "class": "pb-only",
+        "pr": null
+      },
+      "upstream_blob": "8d08dca6247c0576b75a409e78812db75ce62807"
+    },
+    {
+      "patch": "patches/120-repo-icon-no-favicon-load.patch",
+      "path": "src/renderer/src/components/repo/repo-icon.tsx",
+      "reason": "D-62 (Chris, 2026-11-23): no request goes to Google's favicon service; a stored favicon icon renders as the fallback icon. src/shared/repo-icon.ts is shared with the mobile app and stays untouched (OVL-03)",
+      "upstream": {
+        "class": "pb-only",
+        "pr": null
+      },
+      "upstream_blob": "38ca1a42e3b82fce52cc440510fbae42f38a36e5"
+    }
+  ]
+}

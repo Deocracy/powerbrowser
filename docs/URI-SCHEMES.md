@@ -179,6 +179,100 @@ terminal: the Save-As gate first requires the widget to be a
 none — it fails that test before the Navigatable check the URI address
 depends on is ever consulted.
 
+## `pb-orca:`
+
+A hosted Orca pane: one tab per Orca pane, mounting Orca's own view on
+Orca's engine (Phase 64). The form is `pb-orca:<word><n>`, where the word
+names the pane's Orca content type and `<n>` is the lowest index from 1
+not already in use for that word — `chat1`, `chat2`, `term1` — the same
+lowest-free rule as `terminal:`'s `t<n>`, except that a name the name map
+still holds (below) is never issued again.
+
+| Word | Orca content type |
+|------|-------------------|
+| `chat` | `agent-session` (an Orca chat) |
+| `term` | `terminal` (one Orca terminal pane; a split terminal gives one tab per pane) |
+| `sim` | `simulator` |
+| `checks` | `check-details` (Orca's check run details) |
+
+Orca's top-level pages are singleton tabs with no index (Phase 65). Each
+mounts the Orca page it names; opening the address again focuses the same
+tab. No Orca tab backs a page, so closing one closes only the tab.
+
+| Page | Orca page |
+|------|-----------|
+| `pb-orca:tasks` | Tasks |
+| `pb-orca:activity` | Activity |
+| `pb-orca:automations` | Automations |
+| `pb-orca:space` | Space |
+| `pb-orca:skills` | Skills |
+| `pb-orca:artifacts` | Artifacts |
+| `pb-orca:mobile` | Mobile |
+| `pb-orca:settings` | Settings |
+| `pb-orca:creating` | the worktree creation surface, open only while an Orca worktree creation is pending |
+
+Orca's Settings opens as a page tab too, from the sidebar's gear (D-64); Orca's own
+Back to app closes it.
+
+The path is identity only. The Orca tab id, the worktree id and the
+terminal pane key — none of which the user chose — stay in the widget's
+construction options, never in the address. The name is stored in those
+options and replays when Theia restores a layout.
+
+An empty path (`pb-orca:`) focuses the most recently active hosted Orca
+tab, and creates nothing when none exists. Orca panes are created only by
+Orca (an agent, the Orca CLI, or the "New Orca Chat" and "New Orca
+Terminal" commands); an address never creates one.
+
+Every Orca terminal, local or not, is `pb-orca:term<n>` and has no
+`terminal:` address; `terminal:` names only PowerBrowser's own Theia
+terminals. Orca editor, diff and conflict-review tabs are not hosted: they
+open in Theia's own editors and take Theia's own addresses (`file:`,
+`diff:`, `merge-editor:`, whose sides use `pb-orca-git:` below). Orca
+browser panes take a web tab's page URL (Phase 66) and until then open
+nothing.
+
+Relaunch and reload rules (Phase 65):
+
+- **Name map.** Each issued name is kept per profile with the Orca pane it
+  addresses. When Orca shows that pane again — after a frontend reload or
+  a relaunch — it comes back under the same name, never renumbered.
+- **Tombstones.** When Orca drops a pane its name becomes a tombstone. A
+  tombstone is not issued again while a saved Setup or the saved session
+  still names it; it is released at the next launch after neither does.
+  Opening a tombstoned name opens nothing, and a Setup restore counts that
+  tab as gone.
+- **The waiting tab.** A Setup or session restore opens a live name at
+  once, before the new Orca server is ready. The tab shows Orca's own
+  waiting state until Orca lists the pane, then shows the pane; if Orca no
+  longer has it, the tab closes and logs one line. After a reload, a tab
+  waits until Orca lists a pane of its worktree, or at most 15 seconds.
+- **Terminals.** An Orca terminal tab restores like every other hosted
+  pane: under its old `pb-orca:term<n>` name, on a new shell, because the
+  terminals of the previous run have ended.
+
+## `pb-orca-git:`
+
+A content scheme only: it names one version of a file in a git
+repository, and is used inside `diff:` and `merge-editor:` URIs for the
+sides of a Theia diff or merge editor that an Orca diff or conflict
+review opens. It is never a tab address; `TabUriRegistry` does not
+register it, and the tab's own address is the `diff:` or `merge-editor:`
+URI that contains it.
+
+The form is `pb-orca-git:<absolute file path>?<rev>`, where `<rev>` is one
+of:
+
+- a 40- or 64-character lowercase hex git object id: that blob;
+- `:0`, `:1`, `:2` or `:3`: the file's index stage (`:0` the staged
+  version; `:1` to `:3` the base, ours and theirs of a conflict);
+- empty: an empty side (a file added or deleted).
+
+An object-id URI reopens identical content after a relaunch. An index-stage
+URI reads the index when it is reopened, so its content follows the
+repository. Content is read through Theia's backend with
+`git cat-file blob`; the URI carries no ref name, secret or token.
+
 ## `output:`
 
 Already registered by `@theia/output`; this phase adds only the missing

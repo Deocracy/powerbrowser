@@ -211,17 +211,27 @@ export class PowerBrowserTokenGateContribution implements BackendApplicationCont
         if (!header) {
             return undefined;
         }
+        // Several same-named cookies can arrive: a page on another loopback port can set one on a longer path,
+        // which Gecko sends first. Return the one that is the token when any is; else the first, which fails.
+        let first: string | undefined;
         for (const part of header.split(';')) {
             const eq = part.indexOf('=');
             if (eq === -1) {
                 continue;
             }
             const name = part.slice(0, eq).trim();
-            if (name === POWERBROWSER_TOKEN_COOKIE_NAME) {
-                return part.slice(eq + 1).trim();
+            if (name !== POWERBROWSER_TOKEN_COOKIE_NAME) {
+                continue;
+            }
+            const value = part.slice(eq + 1).trim();
+            if (this.isTokenValid(value)) {
+                return value;
+            }
+            if (first === undefined) {
+                first = value;
             }
         }
-        return undefined;
+        return first;
     }
 
     protected isTokenValid(candidate: string): boolean {

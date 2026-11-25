@@ -26,6 +26,22 @@
 //     starts with `nix develop .#theia --command`, because generate.mjs
 //     needs the pinned inkscape. Indentation-aware line scan, no YAML
 //     library: scripts/ imports nothing from theia/node_modules.
+//     harness-static-structure-10: for both replay workflows the direct children of
+//     `on:` must be exactly {workflow_dispatch, workflow_call} (set equality: a
+//     pull_request, pull_request_target or push trigger would run third-party code
+//     for whoever opens a pull request), and no `run:` body may interpolate
+//     `${{ }}` expression except the allow-list (step outcome and conclusion,
+//     the runner context) (an input reaches a shell only through env:, never
+//     through the script text). Every form is caught, because the rule is the
+//     allow-list and not a pattern for the forbidden ones: env indirection,
+//     format(), toJSON(), inputs['tag'], (inputs.tag), any capitalisation. Every
+//     block-scalar header (`|`, `>`, with an indentation or chomping indicator)
+//     is read, so a `run: |2` body is scanned too.
+//     68-02 (OVL-02): the same rules hold for .github/workflows/rebase-orca.yml,
+//     whose triggers declare tag and commit; neither has a default, neither
+//     workflow carries a schedule: key, rebase-orca.yml carries no Orca tag or
+//     40-hex commit outside its `uses:` action pins, and scripts/rebase-orca.sh
+//     runs inside `nix develop .#orca --command`.
 //  3. scripts/fetch-upstream.sh's effective default equals the manifest
 //     tag, resolved by PARSING, never by executing the clone path: the
 //     script must source the fragment and must carry no tag literal of
@@ -85,12 +101,17 @@
 // Honestly --quick: it reads text files and runs one git ls-files. No
 // clone, no fetch, no build, no browser, no display, no network.
 //
+// A step that did not run (the fragment is absent on a fresh clone) makes the row exit 77 with the one SKIP
+// line; a failure wins over it (SKIP-PROTOCOL.md). The self-test supplies its own fragment text, so the
+// pin-moved plants do not depend on generated/ being present.
+//
 // Usage:
 //   node scripts/verify-upstream-pins.mjs
 //   node scripts/verify-upstream-pins.mjs --self-test
 //
-// The self-test plants eight faults and requires each to go red naming the
-// file -- five on the workflow (a default under the workflow_call tag, a
+// The self-test plants twelve pin faults and requires each to go red naming the
+// file -- four on rebase-orca.yml (a tag default, a literal commit default,
+// a schedule: key, the replay outside nix develop .#orca), five on the workflow (a default under the workflow_call tag, a
 // default under the workflow_dispatch tag, the workflow_call trigger
 // removed, a generator step outside nix develop, a tag literal in a
 // comment), an ESR second literal under scripts/, a patch-bumped @theia pin
@@ -104,6 +125,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { SKIP_EXIT, skipLine } from './lib/skip-verdict.mjs';
 import { parse } from './lib/toml.cjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -187,9 +209,26 @@ function sweepExcluded(rel) {
 
 // --- workflow structure, by indentation (step 2) ------------------------------
 // Commands that need the pinned toolchain, and the prefix that supplies it.
-const NIX_SCRIPTS = Object.freeze(['scripts/generate.mjs', 'scripts/verify-generated-identity.mjs', 'scripts/rebase-upstream.sh']);
 const NIX_PREFIX = 'nix develop .#theia --command ';
+const NIX_ORCA_PREFIX = 'nix develop .#orca --command ';
+const NIX_SCRIPTS = Object.freeze([
+    ['scripts/generate.mjs', NIX_PREFIX],
+    ['scripts/verify-generated-identity.mjs', NIX_PREFIX],
+    ['scripts/rebase-upstream.sh', NIX_PREFIX],
+    // OVL-02 (68-02): the Orca replay builds and typechecks Orca, which needs the Orca shell.
+    ['scripts/rebase-orca.sh', NIX_ORCA_PREFIX],
+]);
+// The only expressions a run: body may hold: a step's outcome or conclusion, and the runner context. Case-insensitive.
+const RUN_EXPRESSION_ALLOWED = /^(?:steps\.[\w-]+\.(?:outcome|conclusion)|runner\.[a-z_]+)$/i;
 const WORKFLOW_TRIGGERS = Object.freeze(['workflow_dispatch', 'workflow_call']);
+// The replay workflows and the inputs each trigger must declare with no default (68-02, P68-10/P68-14).
+const ORCA_WORKFLOW_REL = '.github/workflows/rebase-orca.yml';
+const REPLAY_WORKFLOWS = Object.freeze([
+    { rel: WORKFLOW_REL, inputs: ['tag'] },
+    { rel: ORCA_WORKFLOW_REL, inputs: ['tag', 'commit'] },
+]);
+// An Orca tag or a commit written into a replay workflow; action pins (`uses:` lines) are exempt.
+const ORCA_LITERAL = /\bv[0-9]+\.[0-9]+\.[0-9]+\b|\b[0-9a-f]{40}\b/g;
 
 const indentOf = (line) => line.match(/^ */)[0].length;
 const isContent = (line) => line.trim() !== '' && !line.trim().startsWith('#');
@@ -239,7 +278,7 @@ function runCommands(lines) {
         const m = lines[i].match(/^(\s*(?:-\s+)?)run:\s*(.*)$/);
         if (m === null) continue;
         const value = m[2].trim();
-        if (/^[|>][-+]?\s*(#.*)?$/.test(value)) {
+        if (/^[|>](?:[1-9][-+]?|[-+][1-9]?)?\s*(#.*)?$/.test(value)) {
             const keyCol = m[1].length;
             for (let j = i + 1; j < lines.length; j += 1) {
                 if (lines[j].trim() === '') continue;
@@ -253,47 +292,83 @@ function runCommands(lines) {
     return out;
 }
 
-function workflowFailures(text) {
+function workflowFailures(text, rel = WORKFLOW_REL, inputNames = ['tag']) {
     const failures = [];
     const lines = text.split('\n');
+    const named = inputNames.join(' and ');
 
-    // (a) both triggers, each declaring a tag input.
+    // (a) both triggers, each declaring every required input.
     const on = directChild(lines, -1, 'on');
     if (on === -1) {
-        failures.push(`${WORKFLOW_REL} declares no top-level on: block, so nothing can start it. Next step: restore the workflow_dispatch and workflow_call triggers, each with a tag input.`);
+        failures.push(`${rel} declares no top-level on: block, so nothing can start it. Next step: restore the workflow_dispatch and workflow_call triggers, each with ${named} inputs.`);
     } else {
         for (const trigger of WORKFLOW_TRIGGERS) {
             const t = directChild(lines, on, trigger);
             if (t === -1) {
-                failures.push(`${WORKFLOW_REL} declares no ${trigger} trigger, so ${trigger === 'workflow_call' ? 'the release train cannot call it' : 'the owner cannot dispatch it'}. Next step: restore on.${trigger} with a required tag input of type string and no default.`);
+                failures.push(`${rel} declares no ${trigger} trigger, so ${trigger === 'workflow_call' ? 'the release train cannot call it' : 'the owner cannot dispatch it'}. Next step: restore on.${trigger} with required ${named} inputs of type string and no default.`);
                 continue;
             }
-            const tag = directChild(lines, directChild(lines, t, 'inputs'), 'tag');
-            if (tag === -1) {
-                failures.push(`${WORKFLOW_REL} ${trigger} trigger declares no tag input, so the caller cannot name the tag to replay. Next step: add on.${trigger}.inputs.tag, required, of type string, with no default.`);
+            for (const input of inputNames) {
+                if (directChild(lines, directChild(lines, t, 'inputs'), input) === -1) {
+                    failures.push(`${rel} ${trigger} trigger declares no ${input} input, so the caller cannot name the ${input} to replay. Next step: add on.${trigger}.inputs.${input}, required, of type string, with no default.`);
+                }
             }
+        }
+        // D-77: the release train is the cadence; a schedule here would run red with nobody watching.
+        if (directChild(lines, on, 'schedule') !== -1) {
+            failures.push(`${rel} carries a schedule: key, so it runs on its own clock instead of the release train's (D-77). Next step: delete the schedule trigger; the sweep-clock decides the tick.`);
+        }
+        // The set of triggers, compared as set equality with the two callable ones: nothing else may start this job.
+        const kids = childLines(lines, on);
+        const depth = kids.length === 0 ? 0 : indentOf(lines[kids[0]]);
+        const present = new Set(kids.filter(j => indentOf(lines[j]) === depth).map(j => keyName(lines[j])));
+        const extra = [...present].filter(k => !WORKFLOW_TRIGGERS.includes(k)).sort();
+        if (kids.length === 0) {
+            failures.push(`${rel} declares on: as a single value, not a block of triggers, so its trigger set cannot be read. Next step: write on: as a block holding exactly workflow_dispatch and workflow_call.`);
+        } else if (extra.length > 0) {
+            failures.push(`${rel} declares trigger(s) ${extra.join(', ')} besides ${WORKFLOW_TRIGGERS.join(' and ')}, so something other than the owner or the release train can start a job that clones and runs a third-party tree. Next step: delete ${extra.join(', ')} from on:; the trigger set is exactly ${WORKFLOW_TRIGGERS.join(' and ')}.`);
         }
     }
 
-    // (b) no default under any tag input.
+    // (b') a run: body holds no ${{ }} expression except the allow-list; an input reaches a shell only through env:.
+    for (const { line, cmd } of runCommands(lines)) {
+        for (const m of cmd.matchAll(/\$\{\{([\s\S]*?)(?:\}\}|$)/g)) {
+            const expr = m[1].trim();
+            if (RUN_EXPRESSION_ALLOWED.test(expr) && cmd.includes('}}', m.index)) continue;
+            failures.push(`${rel}:${line} puts \${{ ${expr} }} into a run: command, so whatever it names (an input, an event field, an env value) becomes shell text. Next step: pass it through env: (env: NAME: \${{ ... }}) and read "$NAME" in the command; only step outcomes and the runner context may appear in a run body.`);
+        }
+    }
+
+    // (b) no default under any required input.
     for (let i = 0; i < lines.length; i += 1) {
-        if (!keyRe('tag').test(lines[i]) || !isContent(lines[i])) continue;
+        if (!isContent(lines[i])) continue;
+        const input = inputNames.find(n => keyRe(n).test(lines[i]));
+        if (input === undefined) continue;
         const inputs = parentOf(lines, i);
         if (inputs === -1 || keyName(lines[inputs]) !== 'inputs') continue;
         const trigger = parentOf(lines, inputs);
         const where = trigger === -1 ? 'a' : `the ${keyName(lines[trigger])}`;
         for (const j of childLines(lines, i)) {
             if (keyRe('default').test(lines[j])) {
-                failures.push(`${WORKFLOW_REL}:${j + 1} gives ${where} tag input a default, so a run can replay a tag nobody chose and an ESR bump would have to edit this file. Next step: delete the default line; the pin lives in ${MANIFEST_REL} and the caller passes it.`);
+                failures.push(`${rel}:${j + 1} gives ${where} ${input} input a default, so a run can replay a ${input} nobody chose and a pin bump would have to edit this file. Next step: delete the default line; the pin lives in ${MANIFEST_REL} and the caller passes it.`);
             }
         }
     }
 
-    // (c) every generator, identity and rebase command runs inside the Nix shell.
+    // (c) every generator, identity and rebase command runs inside its Nix shell.
     for (const { line, cmd } of runCommands(lines)) {
-        const script = NIX_SCRIPTS.find(s => cmd.includes(s));
-        if (script !== undefined && !cmd.startsWith(NIX_PREFIX)) {
-            failures.push(`${WORKFLOW_REL}:${line} runs ${script} outside nix develop .#theia, so it gets the runner's tools instead of the pinned ones (generate.mjs has no inkscape there). Next step: start that command with '${NIX_PREFIX.trim()}'.`);
+        const hit = NIX_SCRIPTS.find(([s]) => cmd.includes(s));
+        if (hit !== undefined && !cmd.startsWith(hit[1])) {
+            failures.push(`${rel}:${line} runs ${hit[0]} outside ${hit[1].replace(' --command ', '')}, so it gets the runner's tools instead of the pinned ones (generate.mjs has no inkscape there; the Orca replay needs node 24 and corepack). Next step: start that command with '${hit[1].trim()}'.`);
+        }
+    }
+
+    // (d) no Orca tag or commit literal: the caller passes both (68-02).
+    for (let i = 0; i < lines.length; i += 1) {
+        if (!isContent(lines[i]) || /^\s*(?:-\s+)?uses:/.test(lines[i])) continue;
+        const found = lines[i].match(ORCA_LITERAL);
+        if (found !== null) {
+            failures.push(`${rel}:${i + 1} carries a tag or commit literal ${found.join(', ')}, so a run can replay a pin nobody passed. Next step: remove it; the pin lives in ${MANIFEST_REL} and the caller passes tag and commit.`);
         }
     }
     return failures;
@@ -489,12 +564,12 @@ function runChecks(root, overrides = {}) {
     }
 
     // --- 2. the workflow: both triggers, no tag default, generators in Nix --------
-    {
-        const text = read(WORKFLOW_REL);
+    for (const { rel, inputs } of REPLAY_WORKFLOWS) {
+        const text = read(rel);
         if (text === null) {
-            failures.push(`${WORKFLOW_REL} could not be read, so its triggers and steps prove nothing. Next step: restore it.`);
+            failures.push(`${rel} could not be read, so its triggers and steps prove nothing. Next step: restore it.`);
         } else {
-            failures.push(...workflowFailures(text));
+            failures.push(...workflowFailures(text, rel, inputs));
         }
     }
 
@@ -675,13 +750,16 @@ function runChecks(root, overrides = {}) {
 function main() {
     if (args.includes('--self-test')) return selfTest();
     const { failures, skipped, theia, theiaMembers } = runChecks(REPO_ROOT);
-    for (const s of skipped) console.log(`${NAME}: SKIP -- ${s}`);
     if (failures.length > 0) {
         console.error(`${NAME}: FAIL -- ${failures.length} problem(s) with the upstream pin agreement.`);
         failures.forEach(f => console.error(`  ${f}`));
         return 1;
     }
-    console.log(`${NAME}: PASS -- the manifest ESR pin agrees with the fragment and fetch's default, with no second literal in scope; the rebase workflow is callable and dispatchable with no tag default and runs its generator steps inside nix develop .#theia; the Theia pin ${theia} agrees across resolutions, ${theiaMembers} member files and the lockfile`);
+    if (skipped.length > 0) {
+        console.log(skipLine(NAME, skipped.join('; ')));
+        return SKIP_EXIT;
+    }
+    console.log(`${NAME}: PASS -- the manifest ESR pin agrees with the fragment and fetch's default, with no second literal in scope; the replay workflows (rebase-upstream.yml, rebase-orca.yml) are callable and dispatchable with no tag or commit default, no schedule and no Orca pin literal, and run their generator and replay steps inside their Nix shells; the Theia pin ${theia} agrees across resolutions, ${theiaMembers} member files and the lockfile`);
     return 0;
 }
 
@@ -761,13 +839,41 @@ function selfTest() {
             return [...lines.slice(0, t), ...lines.slice(last + 1)].join('\n');
         };
         const bareGenerator = () => {
-            const i = lines.findIndex(l => /^\s*(?:-\s+)?run:\s/.test(l) && l.includes(NIX_PREFIX) && NIX_SCRIPTS.some(sc => l.includes(sc)));
+            const i = lines.findIndex(l => /^\s*(?:-\s+)?run:\s/.test(l) && l.includes(NIX_PREFIX) && NIX_SCRIPTS.some(([sc]) => l.includes(sc)));
             if (i === -1) return null;
             const copy = [...lines];
             copy[i] = copy[i].replace(NIX_PREFIX, '');
             return copy.join('\n');
         };
+        const withTrigger = (name) => {
+            if (on === -1) return null;
+            const copy = [...lines];
+            copy.splice(on + 1, 0, `  ${name}:`);
+            return copy.join('\n');
+        };
+        const interpolated = (expr = 'inputs.tag', block = false) => {
+            const i = lines.findIndex(l => l.includes('--command bash scripts/rebase-upstream.sh'));
+            if (i === -1) return null;
+            const copy = [...lines];
+            copy[i] = `${copy[i]} --tag \${{ ${expr} }}`;
+            if (block) {
+                const h = copy.slice(0, i).map((l, k) => [l, k]).reverse().find(([l]) => /^\s*(?:-\s+)?run:\s*\|\s*$/.test(l));
+                if (!h) return null;
+                copy[h[1]] = copy[h[1]].replace(/\|\s*$/, '|2');
+            }
+            return copy.join('\n');
+        };
         const plants = [
+            ['pull_request_target trigger added', withTrigger('pull_request_target'), 'declares trigger(s) pull_request_target besides'],
+            ['push trigger added', withTrigger('push'), 'declares trigger(s) push besides'],
+            ['an input interpolated into the replay command', interpolated(), 'puts ${{ inputs.tag }} into a run: command'],
+            ['an env value interpolated into the replay command (env indirection)', interpolated('env.REBASE_TAG'), 'puts ${{ env.REBASE_TAG }} into a run: command'],
+            ['an input wrapped in format()', interpolated("format('{0}', inputs.tag)"), 'into a run: command'],
+            ['an input by bracket access', interpolated("inputs['tag']"), "puts ${{ inputs['tag'] }} into a run: command"],
+            ['an input in parentheses', interpolated('(inputs.tag)'), 'puts ${{ (inputs.tag) }} into a run: command'],
+            ['all inputs through toJSON()', interpolated('toJSON(inputs)'), 'puts ${{ toJSON(inputs) }} into a run: command'],
+            ['a capitalised context name', interpolated('Inputs.tag'), 'puts ${{ Inputs.tag }} into a run: command'],
+            ['an input in a run: |2 block (indentation indicator)', interpolated('inputs.tag', true), 'puts ${{ inputs.tag }} into a run: command'],
             ['default under workflow_call tag', withDefault('workflow_call'), 'workflow_call tag input a default'],
             ['default under workflow_dispatch tag', withDefault('workflow_dispatch'), 'workflow_dispatch tag input a default'],
             ['workflow_call trigger removed', withoutCall(), 'declares no workflow_call trigger'],
@@ -786,6 +892,117 @@ function selfTest() {
                 if (!checkNoRoot(name, failures)) failed += 1;
             } else {
                 console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming '${WORKFLOW_REL}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
+                failed += 1;
+            }
+        }
+    }
+
+    // Plants 1f-1i (68-02): four faults on the Orca replay workflow, the same way. The commit
+    // literal is derived from the manifest's own orca_commit line, never kept in this file.
+    {
+        const rel = ORCA_WORKFLOW_REL;
+        const real = readBytes(REPO_ROOT, rel)?.toString('utf8') ?? '';
+        const lines = real.split('\n');
+        const on = directChild(lines, -1, 'on');
+        const commit = /^orca_commit = "([0-9a-f]{40})"$/m.exec(readBytes(REPO_ROOT, MANIFEST_REL)?.toString('utf8') ?? '')?.[1] ?? null;
+        const withDefault = (trigger, input, value) => {
+            const t = directChild(lines, directChild(lines, directChild(lines, on, trigger), 'inputs'), input);
+            if (t === -1 || value === null) return null;
+            const copy = [...lines];
+            copy.splice(t + 1, 0, `${' '.repeat(indentOf(lines[t]) + 2)}default: ${value}`);
+            return copy.join('\n');
+        };
+        const withSchedule = () => {
+            if (on === -1) return null;
+            const copy = [...lines];
+            copy.splice(on + 1, 0, '  schedule:', "    - cron: '0 6 * * 1'");
+            return copy.join('\n');
+        };
+        const bareReplay = () => {
+            const i = lines.findIndex(l => l.includes(`${NIX_ORCA_PREFIX}bash scripts/rebase-orca.sh`));
+            if (i === -1) return null;
+            const copy = [...lines];
+            copy[i] = copy[i].replace(NIX_ORCA_PREFIX, '');
+            return copy.join('\n');
+        };
+        const withTrigger = (name) => {
+            if (on === -1) return null;
+            const copy = [...lines];
+            copy.splice(on + 1, 0, `  ${name}:`);
+            return copy.join('\n');
+        };
+        const interpolated = (input, expr = `inputs.${input}`, block = false) => {
+            const i = lines.findIndex(l => l.includes('--command bash scripts/rebase-orca.sh'));
+            if (i === -1) return null;
+            const copy = [...lines];
+            copy[i] = `${copy[i]} --${input} \${{ ${expr} }}`;
+            if (block) {
+                const h = copy.slice(0, i).map((l, k) => [l, k]).reverse().find(([l]) => /^\s*(?:-\s+)?run:\s*\|\s*$/.test(l));
+                if (!h) return null;
+                copy[h[1]] = copy[h[1]].replace(/\|\s*$/, '|2');
+            }
+            return copy.join('\n');
+        };
+        const plants = [
+            ['pull_request_target trigger added to the Orca replay', withTrigger('pull_request_target'), 'declares trigger(s) pull_request_target besides'],
+            ['push trigger added to the Orca replay', withTrigger('push'), 'declares trigger(s) push besides'],
+            ['the tag input interpolated into the Orca replay command', interpolated('tag'), 'puts ${{ inputs.tag }} into a run: command'],
+            ['the commit input interpolated into the Orca replay command', interpolated('commit'), 'puts ${{ inputs.commit }} into a run: command'],
+            ['the tag through an env indirection in the Orca replay command', interpolated('tag', 'env.REBASE_TAG'), 'puts ${{ env.REBASE_TAG }} into a run: command'],
+            ['the commit wrapped in format() in the Orca replay command', interpolated('commit', "format('{0}', inputs.commit)"), 'into a run: command'],
+            ['the tag in a run: |2 block of the Orca replay', interpolated('tag', 'inputs.tag', true), 'puts ${{ inputs.tag }} into a run: command'],
+            ['default under the Orca workflow_call tag', withDefault('workflow_call', 'tag', 'self-test-plant'), 'workflow_call tag input a default'],
+            ['literal commit default under the Orca workflow_dispatch commit', withDefault('workflow_dispatch', 'commit', commit), 'workflow_dispatch commit input a default'],
+            ['schedule: key on the Orca replay', withSchedule(), 'carries a schedule: key'],
+            ['bare Orca replay step', bareReplay(), 'outside nix develop .#orca'],
+        ];
+        for (const [name, planted, marker] of plants) {
+            if (planted === null || planted === real) {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' planted no fault at all: the substitution did not land.`);
+                failed += 1;
+                continue;
+            }
+            const { failures } = runChecks(REPO_ROOT, { read: (r) => (r === rel ? planted : readBytes(REPO_ROOT, r)?.toString('utf8') ?? null) });
+            if (failures.some(f => f.includes(rel) && f.includes(marker))) {
+                console.log(`  ok  ${name} -> red, naming '${rel}'`);
+                if (!checkNoRoot(name, failures)) failed += 1;
+            } else {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming '${rel}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
+                failed += 1;
+            }
+        }
+    }
+
+    // Plants 2a-2c: the ESR pin moved. The fragment text is supplied here, so the plants do not depend on generated/.
+    {
+        const fragmentOf = (tag) => `# banner\n${FRAGMENT_KEY}=${tag}\n`;
+        const manifestReal = readBytes(REPO_ROOT, MANIFEST_REL)?.toString('utf8') ?? '';
+        const fetchReal = readBytes(REPO_ROOT, FETCH_REL)?.toString('utf8') ?? '';
+        const readWith = (over) => (rel) => (rel in over ? over[rel] : readBytes(REPO_ROOT, rel)?.toString('utf8') ?? null);
+        const movedManifest = manifestReal.replace(/^(firefox_esr_tag\s*=\s*)"[^"]*"/m, `$1"${neighbor}"`);
+        const control = runChecks(REPO_ROOT, { read: readWith({ [FRAGMENT_REL]: fragmentOf(expected) }) });
+        if (control.failures.length > 0) {
+            console.error(`${NAME}: --self-test FAIL -- the control with a fragment equal to the manifest pin is red: ${control.failures.join(' | ')}`);
+            failed += 1;
+        } else {
+            console.log('  ok  control: a fragment equal to the manifest pin -> green');
+        }
+        for (const [name, over, file, marker, landed] of [
+            ['fragment carrying a moved tag', { [FRAGMENT_REL]: fragmentOf(neighbor) }, FRAGMENT_REL, `${FRAGMENT_KEY}=${neighbor}`, true],
+            ['manifest tag moved while the fragment keeps the old one', { [MANIFEST_REL]: movedManifest, [FRAGMENT_REL]: fragmentOf(expected) }, FRAGMENT_REL, `declares ${neighbor}`, movedManifest !== manifestReal],
+            ['fetch-upstream.sh carrying its own tag', { [FETCH_REL]: `${fetchReal}\nTAG=${neighbor}\n` }, FETCH_REL, neighbor, fetchReal !== ''],
+        ]) {
+            if (!landed) {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' planted no fault at all: the substitution did not land.`);
+                failed += 1;
+                continue;
+            }
+            const { failures } = runChecks(REPO_ROOT, { read: readWith(over) });
+            if (failures.some(f => f.includes(file) && f.includes(marker))) {
+                console.log(`  ok  ${name} -> red, naming '${file}'`);
+                if (!checkNoRoot(name, failures)) failed += 1;
+            } else {
+                console.error(`${NAME}: --self-test FAIL -- '${name}' did not go red naming '${file}'; got: ${failures.join(' | ') || '(no failures at all)'}`);
                 failed += 1;
             }
         }
@@ -947,7 +1164,7 @@ function selfTest() {
     }
 
     if (failed > 0) return 1;
-    console.log(`${NAME}: --self-test PASS -- 14 planted faults went red naming the drifted file (8 pin plants, 3 uptake-source plants and 3 uptake-link plants)`);
+    console.log(`${NAME}: --self-test PASS -- every planted fault went red naming the drifted file (pin, trigger-set, injection, moved-pin, uptake-source and uptake-link plants)`);
     return 0;
 }
 

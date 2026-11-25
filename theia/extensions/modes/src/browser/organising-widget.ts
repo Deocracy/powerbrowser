@@ -514,7 +514,7 @@ export class OrganisingWidget extends Widget {
         // The canvas is the placement surface, so it has to BE the visible
         // area: loose tabs sit on a line near its bottom, and a canvas shorter
         // than its host would put that line outside itself.
-        this.canvasRoot.style.minHeight = `${Math.max(320, this.canvasHost.clientHeight - 4)}px`;
+        this.canvasRoot.style.minHeight = `${Math.max(320, this.canvasInner().h)}px`;
         while (this.canvasRoot.firstChild) {
             this.canvasRoot.removeChild(this.canvasRoot.firstChild);
         }
@@ -549,6 +549,19 @@ export class OrganisingWidget extends Widget {
     }
 
     /**
+     * The host's content box: clientWidth/clientHeight include its padding,
+     * and the canvas sits inside that padding, so sizing the canvas from
+     * them made it taller than the visible area and scrolled it.
+     */
+    protected canvasInner(): { w: number; h: number } {
+        const style = getComputedStyle(this.canvasHost);
+        return {
+            w: this.canvasHost.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0),
+            h: this.canvasHost.clientHeight - (parseFloat(style.paddingTop) || 0) - (parseFloat(style.paddingBottom) || 0),
+        };
+    }
+
+    /**
      * Loose tabs -- the ones in no group -- drawn ON the canvas rather than in
      * a strip below it. They are canvas objects like a group box: they have a
      * position, they keep it, and nothing overlaps them.
@@ -564,8 +577,9 @@ export class OrganisingWidget extends Widget {
         if (!tabs.length) {
             return;
         }
-        const width = Math.max(LOOSE_W + LOOSE_MARGIN * 2, this.canvasHost.clientWidth);
-        const height = Math.max(LOOSE_H + LOOSE_MARGIN * 2, this.canvasHost.clientHeight);
+        const inner = this.canvasInner();
+        const width = Math.max(LOOSE_W + LOOSE_MARGIN * 2, inner.w);
+        const height = Math.max(LOOSE_H + LOOSE_MARGIN * 2, inner.h);
         const line = Math.max(minTop, height - LOOSE_H - LOOSE_MARGIN);
         if (line + LOOSE_H + LOOSE_MARGIN > height) {
             // Pushed below the host: grow the canvas so the line is still on it (the host scrolls).
@@ -635,7 +649,14 @@ export class OrganisingWidget extends Widget {
      * Panorama does there and it is W8, not this change.
      */
     protected tileCards(): void {
-        for (const host of Array.from(this.canvasRoot.querySelectorAll('.pb-org-box-cards')) as HTMLElement[]) {
+        // Every group is measured before any is written. This runs on every
+        // resize and drag step, and reading the next group's size after the
+        // last one's writes forced a reflow per group per step. Each box has
+        // its own fixed size and its cards are out of flow once tiled, so no
+        // group's writes change another group's size.
+        const measured = (Array.from(this.canvasRoot.querySelectorAll('.pb-org-box-cards')) as HTMLElement[])
+            .map(host => ({ host, width: host.clientWidth, height: host.clientHeight }));
+        for (const { host, width, height } of measured) {
             const cards = Array.from(host.querySelectorAll('.pb-org-card')) as HTMLElement[];
             // A card hovering over this group is already counted in: the grid
             // re-packs to make room and a translucent slot shows where it
@@ -657,12 +678,15 @@ export class OrganisingWidget extends Widget {
             if (!total) {
                 continue;
             }
-            const cell = fitTiles(total, host.clientWidth, host.clientHeight);
+            const cell = fitTiles(total, width, height);
             if (!cell) {
-                this.stackCards(host, cards);
+                slot?.remove();
+                this.stackCards(host, cards, width, height);
                 continue;
             }
             host.classList.remove('is-stacked');
+            host.querySelector('.pb-org-stack-count')?.remove();
+            host.querySelector('.pb-org-expander')?.remove();
             if (slot) {
                 const index = Math.max(0, Math.min(total - 1, this.dropPreviewIndex));
                 slot.style.left = `${(index % cell.cols) * (cell.w + TILE_GAP)}px`;
@@ -698,11 +722,11 @@ export class OrganisingWidget extends Widget {
      * clipping or scrolling them. It is the other half of "never scroll" --
      * without it the grid has to give up somewhere, and giving up meant a
      * scrollbar hiding the tabs the canvas exists to show.
+     *
+     * `boxW` and `boxH` are the host's client size, measured by tileCards before any write.
      */
-    protected stackCards(host: HTMLElement, cards: HTMLElement[]): void {
+    protected stackCards(host: HTMLElement, cards: HTMLElement[], boxW: number, boxH: number): void {
         host.classList.add('is-stacked');
-        const boxW = host.clientWidth;
-        const boxH = host.clientHeight;
         const spread = STACK_OFFSET * (Math.min(cards.length, STACK_VISIBLE) - 1);
         const w = Math.max(40, Math.min(boxW - spread - 16, Math.floor((boxH - spread - 26) / TILE_ASPECT), 170));
         const h = Math.max(30, Math.round(w * TILE_ASPECT));
@@ -722,11 +746,19 @@ export class OrganisingWidget extends Widget {
             card.style.zIndex = `${STACK_VISIBLE - index}`;
         });
 
-        const badge = document.createElement('div');
-        badge.className = 'pb-org-stack-count';
+        // tileCards runs on every drag step and press without a rebuild, so
+        // the badge and the Expand control are reused, never appended again.
+        let badge = host.querySelector('.pb-org-stack-count') as HTMLElement | null;
+        if (!badge) {
+            badge = document.createElement('div');
+            badge.className = 'pb-org-stack-count';
+            badge.setAttribute('aria-hidden', 'true');
+            host.append(badge);
+        }
         badge.textContent = String(cards.length);
-        badge.setAttribute('aria-hidden', 'true');
-        host.append(badge);
+        if (host.querySelector('.pb-org-expander')) {
+            return;
+        }
 
         const expander = document.createElement('button');
         expander.type = 'button';
@@ -738,6 +770,9 @@ export class OrganisingWidget extends Widget {
             event.stopPropagation();
             this.expandedGroupId = group?.dataset.g;
             this.render();
+            // The render removed this button; focus goes into the overlay so
+            // Esc (heard on the widget node) and Tab work there.
+            (this.expandRoot.querySelector('.pb-org-expand-done') as HTMLElement | null)?.focus();
         });
         host.append(expander);
     }
@@ -783,8 +818,12 @@ export class OrganisingWidget extends Widget {
     }
 
     protected collapseStack(): void {
+        const id = this.expandedGroupId;
         this.expandedGroupId = undefined;
         this.render();
+        if (id) {
+            (this.canvasRoot.querySelector(`[data-g="${CSS.escape(id)}"] .pb-org-expander`) as HTMLElement | null)?.focus();
+        }
     }
 
     protected renderTree(): void {
@@ -1245,8 +1284,17 @@ export class OrganisingWidget extends Widget {
         const input = this.node.querySelector('.pb-org-rename');
         if (input instanceof HTMLElement) {
             // `blur` runs the field's own `commit`, which saves what was
-            // typed and clears the flag synchronously.
-            input.blur();
+            // typed and clears the flag synchronously. The commit's model
+            // change would also repaint synchronously and replace the node
+            // this press is about to capture, so the repaint is held; the
+            // commit's own trailing render, or the gesture's, paints it.
+            const held = this.suppressRender;
+            this.suppressRender = true;
+            try {
+                input.blur();
+            } finally {
+                this.suppressRender = held;
+            }
         }
         // The field was already gone -- a render dropped it -- so nothing was
         // ever going to clear the flag and every gesture would stay jammed.
@@ -1416,12 +1464,18 @@ export class OrganisingWidget extends Widget {
         const base = { x: group.x, y: group.y };
         this.moveState = { id: group.id, startX: event.clientX, startY: event.clientY, baseX: group.x, baseY: group.y };
         const box = header.closest('.pb-org-box') as HTMLElement | null;
+        // Pointer travel is in screen pixels; bounds are canvas pixels, which
+        // the zoom scales -- the same division canvasPoint makes.
+        const zoom = ZOOM_STEPS[this.zoomIndex] / 100;
+        const placed = (state: { baseX: number; baseY: number; startX: number; startY: number }, at: PointerEvent): { x: number; y: number } => ({
+            x: Math.max(0, Math.floor(state.baseX + (at.clientX - state.startX) / zoom)),
+            y: Math.max(0, Math.floor(state.baseY + (at.clientY - state.startY) / zoom)),
+        });
         const onMove = (move: PointerEvent): void => {
             if (!this.moveState) {
                 return;
             }
-            const x = Math.max(0, Math.floor(this.moveState.baseX + (move.clientX - this.moveState.startX)));
-            const y = Math.max(0, Math.floor(this.moveState.baseY + (move.clientY - this.moveState.startY)));
+            const { x, y } = placed(this.moveState, move);
             if (box) {
                 box.style.transform = `translate(${x}px, ${y}px)`;
             }
@@ -1443,9 +1497,8 @@ export class OrganisingWidget extends Widget {
             if (!this.moveState) {
                 return;
             }
-            const { id, baseX, baseY } = this.moveState;
-            const x = Math.max(0, Math.floor(baseX + (up.clientX - this.moveState.startX)));
-            const y = Math.max(0, Math.floor(baseY + (up.clientY - this.moveState.startY)));
+            const { id } = this.moveState;
+            const { x, y } = placed(this.moveState, up);
             this.moveState = undefined;
             this.suppressRender = false;
             void this.persistMove(id, x, y, seq).catch(error => {
@@ -1455,29 +1508,25 @@ export class OrganisingWidget extends Widget {
                 void this.separateGroups(id);
             });
         };
+        // Esc and pointercancel both cancel: invalidate the trailing debounce,
+        // revert the paint, and restore persisted bounds to base -- nothing
+        // new stays moved or persisted.
         const onCancel = (): void => {
             finish();
+            this.geometrySeq += 1;
+            const id = this.moveState?.id;
             this.moveState = undefined;
             this.suppressRender = false;
-            this.geometrySeq += 1;
             this.render();
+            if (id) {
+                void this.model.moveGroup(this.actor, id, base.x, base.y).catch(error => {
+                    console.error('[@powerbrowser/modes] group move cancel-restore failed:', error);
+                }).finally(() => this.render());
+            }
         };
         const onKey = (key: KeyboardEvent): void => {
             if (key.key === 'Escape') {
-                // Esc cancels: invalidate the trailing debounce, revert the
-                // paint, and restore persisted bounds to base -- nothing new
-                // stays moved or persisted.
-                finish();
-                this.geometrySeq += 1;
-                const id = this.moveState?.id;
-                this.moveState = undefined;
-                this.suppressRender = false;
-                this.render();
-                if (id) {
-                    void this.model.moveGroup(this.actor, id, base.x, base.y).catch(error => {
-                        console.error('[@powerbrowser/modes] group move cancel-restore failed:', error);
-                    }).finally(() => this.render());
-                }
+                onCancel();
             }
         };
         header.addEventListener('pointermove', onMove);
@@ -1516,10 +1565,12 @@ export class OrganisingWidget extends Widget {
         const north = edge.includes('n');
         const horizontal = edge.includes('e') || west;
         const vertical = edge.includes('s') || north;
+        // Screen pixels to canvas pixels, as in beginBoxMove and canvasPoint.
+        const zoom = ZOOM_STEPS[this.zoomIndex] / 100;
 
         const apply = (clientX: number, clientY: number): { x: number; y: number; w: number; h: number } => {
-            const dx = clientX - startX;
-            const dy = clientY - startY;
+            const dx = Math.round((clientX - startX) / zoom);
+            const dy = Math.round((clientY - startY) / zoom);
             let { x, y, w, h } = base;
             if (horizontal) {
                 w = Math.max(GROUP_BOX_MIN_W, west ? base.w - dx : base.w + dx);
@@ -1580,23 +1631,22 @@ export class OrganisingWidget extends Widget {
                 void this.separateGroups(group.id);
             });
         };
+        // Esc and pointercancel both restore the base bounds: a debounced
+        // write may already have stored a mid-drag size.
         const onCancel = (): void => {
             finish();
-            this.suppressRender = false;
             this.geometrySeq += 1;
+            this.suppressRender = false;
             this.render();
+            void this.model.resizeGroup(this.actor, group.id, base.w, base.h)
+                .then(() => this.model.moveGroup(this.actor, group.id, base.x, base.y))
+                .catch(error => {
+                    console.error('[@powerbrowser/modes] group resize cancel-restore failed:', error);
+                }).finally(() => this.render());
         };
         const onKey = (key: KeyboardEvent): void => {
             if (key.key === 'Escape') {
-                finish();
-                this.geometrySeq += 1;
-                this.suppressRender = false;
-                this.render();
-                void this.model.resizeGroup(this.actor, group.id, base.w, base.h)
-                    .then(() => this.model.moveGroup(this.actor, group.id, base.x, base.y))
-                    .catch(error => {
-                        console.error('[@powerbrowser/modes] group resize cancel-restore failed:', error);
-                    }).finally(() => this.render());
+                onCancel();
             }
         };
         grip.addEventListener('pointermove', onMove);
@@ -1611,7 +1661,9 @@ export class OrganisingWidget extends Widget {
             ...(Array.from(this.canvasRoot.querySelectorAll('.pb-org-card.is-loose')) as HTMLElement[])
                 .flatMap(card => {
                     const uri = card.dataset.u;
-                    if (!uri || card.hidden) {
+                    // Piled cards overlap the pile's front card by design;
+                    // separating them would scatter the pile.
+                    if (!uri || card.hidden || card.classList.contains('is-piled')) {
                         return [];
                     }
                     return [{
@@ -1703,7 +1755,9 @@ export class OrganisingWidget extends Widget {
         if (w === current.w && h === current.h) {
             return;
         }
-        void this.persistResize(id, w, h, this.geometrySeq).then(() => {
+        // Push-away as the pointer resize does, so a box grown from the
+        // keyboard does not cover its neighbours.
+        void this.persistResize(id, w, h, this.geometrySeq).then(() => this.separateGroups(id)).then(() => {
             const grip = this.node.querySelector(`[data-g="${CSS.escape(id)}"] .pb-org-box-resize`) as HTMLElement | null;
             if (grip) {
                 grip.focus();
@@ -1749,6 +1803,11 @@ export class OrganisingWidget extends Widget {
         // painted a focus ring on the very card being dragged, which is a
         // blue outline around the thing under the pointer for the whole
         // gesture. Keyboard focus still rings, through :focus-visible.
+        //
+        // preventDefault keeps focus in an open name field, and the drop's
+        // repaint would rebuild that field from the stored title, so the
+        // typed name is committed first, as every other canvas press does.
+        this.settleRename();
         event.preventDefault();
         const startX = event.clientX;
         const startY = event.clientY;
@@ -1850,6 +1909,10 @@ export class OrganisingWidget extends Widget {
         };
 
         const finish = (ev: PointerEvent): void => {
+            // Read the slot BEFORE detach clears it -- it is where the card
+            // goes, and the preview promised exactly this place.
+            const previewGroup = this.dropPreviewGroupId;
+            const previewIndex = this.dropPreviewIndex;
             detach();
             if (!dragging) {
                 return;
@@ -1859,20 +1922,28 @@ export class OrganisingWidget extends Widget {
             // in a stock window. Swallow exactly one click, in capture, so
             // the drop is the only thing the gesture does. A press without a
             // drag never reaches here, so plain clicks are untouched.
+            const swallow = (event: Event): void => {
+                event.stopPropagation();
+                event.preventDefault();
+            };
             for (const kind of ['click', 'dblclick']) {
-                card.addEventListener(kind, event => {
-                    event.stopPropagation();
-                    event.preventDefault();
-                }, { capture: true, once: true });
+                card.addEventListener(kind, swallow, { capture: true, once: true });
             }
+            // Only this release's own click: a listener left armed would eat
+            // the next double-click on the card. A mouse release fires its
+            // click in the same task; a touch or pen release synthesizes it a
+            // little later, so the listeners stay for a short while.
+            window.setTimeout(() => {
+                for (const kind of ['click', 'dblclick']) {
+                    card.removeEventListener(kind, swallow, { capture: true });
+                }
+            }, 500);
             card.classList.remove('is-dragging');
             this.clearDropTargets();
             const under = hitTest(ev);
             const targetBox = under?.closest('.pb-org-box') as HTMLElement | null;
-            // Read the slot BEFORE detach clears it -- it is where the card
-            // goes, and the preview promised exactly this place.
-            const at = targetBox && targetBox.dataset.g === this.dropPreviewGroupId
-                ? this.dropPreviewIndex
+            const at = targetBox && targetBox.dataset.g === previewGroup
+                ? previewIndex
                 : undefined;
             // A group is checked first: since the cards tile to fill their
             // group, nearly every drop inside a box lands on a card rather
@@ -1881,7 +1952,9 @@ export class OrganisingWidget extends Widget {
             // there. A release anywhere else changes nothing.
             if (targetBox && targetBox.dataset.g) {
                 void this.dropCard(ev, targetBox.dataset.g, at);
-            } else if (under?.closest('.pb-org-canvas')) {
+            } else if (under?.closest('.pb-org-canvas-host')) {
+                // The host, not the canvas: below 100% zoom the scaled canvas
+                // covers only part of the visible field.
                 void this.dropCardOnField(ev);
             } else {
                 // Released outside every target: the arrangement is unchanged.
@@ -1930,9 +2003,14 @@ export class OrganisingWidget extends Widget {
         if (!cell) {
             return count;
         }
+        // The rect is in zoomed screen pixels and the cells in canvas pixels;
+        // divide the zoom out as canvasPoint does.
+        const zoom = ZOOM_STEPS[this.zoomIndex] / 100;
         const rect = host.getBoundingClientRect();
-        const column = Math.floor((event.clientX - rect.left + (cell.w + TILE_GAP) / 2) / (cell.w + TILE_GAP));
-        const row = Math.floor((event.clientY - rect.top) / (cell.h + TILE_GAP));
+        const px = (event.clientX - rect.left) / zoom;
+        const py = (event.clientY - rect.top) / zoom;
+        const column = Math.floor((px + (cell.w + TILE_GAP) / 2) / (cell.w + TILE_GAP));
+        const row = Math.floor(py / (cell.h + TILE_GAP));
         return Math.max(0, Math.min(count, row * cell.cols + Math.max(0, Math.min(cell.cols, column))));
     }
 
@@ -1951,8 +2029,17 @@ export class OrganisingWidget extends Widget {
         if (!drag) {
             return;
         }
+        // The preview grid still counts the dragged card in its old place, and
+        // moveCard inserts after removing it, so a later slot is one earlier.
+        let at = index;
+        if (at !== undefined && toGroup !== null && drag.fromGroup === toGroup) {
+            const from = this.model.getTabs(toGroup).findIndex(tab => tab.uri === drag.uri);
+            if (from >= 0 && at > from) {
+                at -= 1;
+            }
+        }
         try {
-            await this.model.moveCard(this.actor, drag.uri, toGroup, index);
+            await this.model.moveCard(this.actor, drag.uri, toGroup, at);
             await this.dissolveEmptied(drag.fromGroup, toGroup);
         } catch (error) {
             console.error('[@powerbrowser/modes] card drop failed:', error);
@@ -2131,7 +2218,10 @@ export class OrganisingWidget extends Widget {
     }
 
     protected focusRename(id: string): void {
-        const input = this.node.querySelector(`[data-g="${CSS.escape(id)}"] .pb-org-rename`) as HTMLInputElement | null;
+        // The view that is showing: both roots carry the field, and the
+        // hidden one cannot take focus.
+        const root = this.view === 'canvas' ? this.canvasRoot : this.treeRoot;
+        const input = root.querySelector(`[data-g="${CSS.escape(id)}"] .pb-org-rename`) as HTMLInputElement | null;
         if (input) {
             input.focus();
             input.select();
@@ -2145,10 +2235,14 @@ export class OrganisingWidget extends Widget {
         } catch {
             return;
         }
-        window.setTimeout(() => {
+        // A newer notice restarts the timer, so an older one cannot remove it early.
+        window.clearTimeout(this.flashTimer);
+        this.flashTimer = window.setTimeout(() => {
             void this.statusBar.removeElement(id).catch(() => undefined);
         }, 4000);
     }
+
+    protected flashTimer = 0;
 
     // Static DOM (built once; roots re-render over the model).
 

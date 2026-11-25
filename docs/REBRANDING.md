@@ -302,12 +302,20 @@ with the OpenCode adapter. A manifest that still carries it now fails with
 | `telemetry.level` | Optional | Resolves to `off` with the standard default echo; nothing ever leaves the application | `generated/theia-telemetry.json` level (one of off, crash, error, all); an enabled level with no endpoint fails naming `telemetry.endpoint` |
 | `telemetry.endpoint` | Optional | Inherits the platform's events endpoint. At a level other than off, a downstream under its own name that inherits it is refused naming `telemetry.endpoint`; at level off the inherited value stays in the fragment (see Downstream obligations) | `generated/theia-telemetry.json` endpoint plus endpoint hosts when stated (must be your own https URL, or `""` for none) |
 
-### `[upstreams]` — upstream pins (both required, never inherited)
+### `[upstreams]` — upstream pins (two required keys and two optional keys, never inherited)
 
 | Setting | Required? | If omitted | Reaches |
 |---|---|---|---|
 | `upstreams.firefox_esr_tag` | Required | Hard failure; must be an `*esr_RELEASE` tag, never a `_BUILDn` candidate | `generated/upstream-pins.env`, the fetch script default; the ESR version in `powerbrowser/packaging/version/version.txt` and the release key in `powerbrowser/packaging/version/release.txt` |
 | `upstreams.theia_release` | Required | Hard failure | Exact triple enforced across every `@theia/*` pin and the lockfile by `verify-upstream-pins`; the generator emits no fragment for it |
+| `upstreams.orca_tag` | Optional | Nothing is emitted, and `scripts/fetch-orca.sh` fails naming `node scripts/generate.mjs`; stating it without `upstreams.orca_commit` is a hard failure | `generated/upstream-pins.env` (`UPSTREAM_ORCA_TAG`), `scripts/fetch-orca.sh` |
+| `upstreams.orca_commit` | Optional | Nothing is emitted, and `scripts/fetch-orca.sh` fails naming `node scripts/generate.mjs`; stating it without `upstreams.orca_tag` is a hard failure; must be the peeled commit, never the tag object | `generated/upstream-pins.env` (`UPSTREAM_ORCA_COMMIT`), `scripts/fetch-orca.sh` |
+
+### `[orca]` — the Orca overlay gate (one optional key)
+
+| Setting | Required? | If omitted | Reaches |
+|---|---|---|---|
+| `orca.seam_cap` | Optional | Inherits this platform's value, 10 | `scripts/verify-orca-overlay.mjs` only: the most upstream Orca files `orca-overlay/` may patch; nothing is emitted from it |
 
 ### `[[variants]]` — build variants (every key required per element)
 

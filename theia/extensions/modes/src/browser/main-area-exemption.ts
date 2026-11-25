@@ -208,6 +208,11 @@ export class MainAreaExemption implements FrontendApplicationContribution {
             if (!layout) {
                 continue;
             }
+            // A layout this pass already stripped (no switch has re-saved it since)
+            // keeps the ids its first strip recorded: recording the empty set here
+            // would leave afterSwitch nothing to repair once any other switch had
+            // run in between.
+            const fresh = layout.mainPanel !== undefined || layout.bottomPanel !== undefined;
             const removed = new Set<string>();
             collectDockIds(layout.mainPanel?.main as DockAreaLike | undefined, removed);
             collectDockIds(layout.bottomPanel?.config?.main as DockAreaLike | undefined, removed);
@@ -217,7 +222,9 @@ export class MainAreaExemption implements FrontendApplicationContribution {
             // Written back rather than relying on the object being stock's own
             // map value: the exemption should not depend on that aliasing.
             this.internal.setSavedLayout(id, layout);
-            this.strippedIds.set(id, removed);
+            if (fresh) {
+                this.strippedIds.set(id, removed);
+            }
         }
     }
 

@@ -1,0 +1,85 @@
+/*
+ * A hosted Orca side surface fills its view-container part, as Orca's own shell column does
+ * (debug orca-mode-fresh-profile-look, 2026-11-18; checked by orca-side-panel-live clause j).
+ *
+ * The part node carries data-pb-orca-pane, and the scoped pane stylesheet maps Orca's body rule
+ * (height: 100dvh) onto that attribute. A main-area pane is sized inline by its Lumino layout; a part
+ * is not, so without the first rule its node is a viewport tall and Orca's footer row falls below the
+ * part.
+ */
+.pb-orca-side-view {
+  height: 100%;
+}
+
+/*
+ * Orca mounts Sidebar and RightSidebar in a row flexbox whose column is exactly the surface's width,
+ * which useSidebarResize writes inline from Orca's store (sidebarWidth, rightSidebarWidth). Here the
+ * column is the Theia part: the surface takes the part's height (the pane root is a column flexbox)
+ * and the part's width. Only !important in a stylesheet outranks the inline width.
+ */
+.pb-orca-side-view > .pb-orca-pane-host > [data-pb-orca-pane-root] > :first-child {
+  flex: 1 1 0%;
+  min-height: 0;
+  width: auto !important;
+}
+
+/*
+ * Resizing a hosted Orca side part (debug orca-mode-fresh-profile-look round 3, owner 2026-11-19: "I could not drag
+ * out the right slide in orca mode"; checked by orca-side-panel-live clause m).
+ *
+ * In Orca a drag on the sidebar's edge resizes the sidebar. Here the Theia side panel is what must resize, and its
+ * split handle does so. Orca's own handles (the sidebar's data-sidebar-resize-handle, the right sidebar's
+ * cursor-col-resize strip on its inner column) only write Orca's stored width, which the rule above overrides, yet they
+ * showed the resize cursor over most of the edge, so a drag that started there moved nothing. They take no pointer
+ * here.
+ */
+.pb-orca-side-view [data-sidebar-resize-handle],
+.pb-orca-side-view > .pb-orca-pane-host > [data-pb-orca-pane-root] > :first-child > :first-child > .cursor-col-resize {
+  pointer-events: none;
+}
+
+/*
+ * In the Orca mode Theia's side split handles take Orca's grab band: Orca's sidebar handle straddles the border, 6 px
+ * each side ('absolute -right-1.5 w-3' in components/sidebar/index.tsx), where Theia's sash is about 4 px. The band is a
+ * transparent pseudo-element of the handle itself, so Lumino's own drag runs and the sash keeps its look; a hidden
+ * handle (a collapsed side) hides it too.
+ */
+body[data-pb-mode="orca"] #theia-left-right-split-panel > .lm-SplitPanel-handle::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -6px;
+  width: 12px;
+}
+
+/*
+ * Orca's closed-state right-sidebar toggle (orca-right-sidebar-toggle.ts; debug orca-mode-fresh-profile-look,
+ * 2026-11-18, defect B; checked by orca-side-panel-live clause l): at the main area's top right, in its first tab
+ * row, as Orca's AppWorkspaceShell places it at the workspace area's top right. The host carries the pane scope
+ * attribute, so Orca's body rule (a viewport tall, Orca's background) reaches it at zero specificity; these
+ * declarations replace it. The tab bar under it keeps the button's width clear (padding set from the script).
+ */
+.pb-orca-right-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 10;
+  width: auto;
+  height: var(--theia-private-horizontal-tab-height, 35px);
+  display: flex;
+  align-items: center;
+  background: transparent;
+  overflow: visible;
+}
+
+.pb-orca-right-toggle[hidden] {
+  display: none;
+}
+
+.pb-orca-right-toggle > [data-pb-orca-pane-root] {
+  width: auto !important;
+  height: 100% !important;
+  flex-direction: row !important;
+  align-items: center;
+}

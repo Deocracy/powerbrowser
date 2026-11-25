@@ -96,8 +96,14 @@ export interface ModeRules {
     left: PanelRule;
     right: PanelRule;
     bottom: PanelRule;
-    /** The IDE furniture: the status bar and both icon rails (14-UI-SPEC per-mode furniture, amended 2026-09-08). */
+    /** The IDE furniture: both side containers (their icon rows) and the IDE dress (14-UI-SPEC per-mode furniture, amended 2026-09-08). */
     furniture: boolean;
+    /**
+     * Theia's status bar. Its own rule since 2026-11-18 (debug orca-mode-fresh-profile-look, owner: "the botom has
+     * the thiea purpel bar witch should not be there"): the Orca mode keeps the furniture for its side panels but
+     * not Theia's status bar, which Orca's own app does not have.
+     */
+    statusBar: boolean;
     /** Whether the mode opens the Organising slot (the Panorama canvas). */
     organising: boolean;
     views: ModeViews;
@@ -108,11 +114,16 @@ export interface ModeRules {
  * with shipped defaults"). One row per shipped descriptor, one line per row:
  * gui07-mode-toggle-commands reads this table and compares it with the
  * descriptors' first-activation placements and collapse areas.
+ * P65-09: the orca row docks Orca's two view containers, the left
+ * powerbrowser-orca-view-container and the right
+ * powerbrowser-orca-right-view-container (literals; modes never imports
+ * orca-panes), and adds no activation hook (P64-18).
  */
 export const SHIPPED_MODE_RULES: Readonly<Record<string, ModeRules>> = Object.freeze({
-    coding: { left: 'open', right: 'keep', bottom: 'open', furniture: true, organising: false, views: { left: ['explorer-view-container'], right: [], bottom: [] } },
-    browsing: { left: 'closed', right: 'closed', bottom: 'closed', furniture: false, organising: false, views: { left: [], right: [], bottom: [] } },
-    organising: { left: 'closed', right: 'closed', bottom: 'closed', furniture: false, organising: true, views: { left: [], right: [], bottom: [] } },
+    coding: { left: 'open', right: 'keep', bottom: 'open', furniture: true, statusBar: true, organising: false, views: { left: ['explorer-view-container'], right: [], bottom: [] } },
+    browsing: { left: 'closed', right: 'closed', bottom: 'closed', furniture: false, statusBar: false, organising: false, views: { left: [], right: [], bottom: [] } },
+    organising: { left: 'closed', right: 'closed', bottom: 'closed', furniture: false, statusBar: false, organising: true, views: { left: [], right: [], bottom: [] } },
+    orca: { left: 'open', right: 'open', bottom: 'closed', furniture: true, statusBar: false, organising: false, views: { left: ['powerbrowser-orca-view-container'], right: ['powerbrowser-orca-right-view-container'], bottom: [] } },
 });
 
 export interface CustomModeSnapshot {
@@ -122,6 +133,8 @@ export interface CustomModeSnapshot {
     bottomVisible: boolean;
     /** NG-035: whether the IDE furniture shows in this mode. */
     furniture: boolean;
+    /** Whether Theia's status bar shows in this mode; a row saved before it existed reads its furniture flag. */
+    statusBar: boolean;
     /** NG-035: the views docked per side area when the mode was saved. */
     views: ModeViews;
 }
@@ -159,7 +172,28 @@ interface ParsedModeStore {
     ok: boolean;
     customs: CustomModeSnapshot[];
     badNames: string[];
+    /** Rows whose name a later build gave to a shipped mode, renamed: from the stored name to the name now used. */
+    renamed: Array<{ from: string; to: string }>;
+    /** The store text with only those rows' names changed, to write back once; undefined when nothing was renamed. */
+    migrated?: string;
 }
+
+/**
+ * Audit fix (theia-pane-hosting-04): a custom mode saved under a name a later build gives to a shipped mode
+ * (v1.7 added Orca) keeps its layout under a new name, "<name> (custom)", or "<name> (custom 2)" and so on when
+ * that is taken, instead of being dropped and then erased by the next save.
+ */
+export function renamedCustomModeName(name: string, taken: (candidate: string) => boolean): string {
+    for (let n = 1; ; n++) {
+        const suffix = n === 1 ? ' (custom)' : ` (custom ${n})`;
+        const candidate = name.slice(0, MODE_NAME_MAX - suffix.length).trim() + suffix;
+        if (!taken(candidate)) {
+            return candidate;
+        }
+    }
+}
+
+const isShippedLabel = (name: string): boolean => SHIPPED_MODES.some(descriptor => descriptor.label.toLowerCase() === name.toLowerCase());
 
 /**
  * Total parse of the customs file: never throws, always produces a value.
@@ -168,7 +202,7 @@ interface ParsedModeStore {
  * in badNames only when its name survived (otherwise silent).
  */
 function parseModeStore(raw: string): ParsedModeStore {
-    const empty: ParsedModeStore = { ok: false, customs: [], badNames: [] };
+    const empty: ParsedModeStore = { ok: false, customs: [], badNames: [], renamed: [] };
     let top: unknown;
     try {
         top = JSON.parse(raw);
@@ -184,7 +218,13 @@ function parseModeStore(raw: string): ParsedModeStore {
     }
     const customs: CustomModeSnapshot[] = [];
     const badNames: string[] = [];
+    const renamed: Array<{ from: string; to: string }> = [];
     const seen = new Set<string>();
+    // Every stored name, so that a renamed row never takes the name of a row further down the list.
+    const stored = new Set<string>((record['customs'] as unknown[]).flatMap(entry => {
+        const n = (entry as Record<string, unknown> | null)?.['name'];
+        return typeof n === 'string' ? [customModeIdFor(n.trim().slice(0, MODE_NAME_MAX))] : [];
+    }));
     for (const entry of record['customs']) {
         if (typeof entry !== 'object' || entry === null) {
             continue;
@@ -193,16 +233,24 @@ function parseModeStore(raw: string): ParsedModeStore {
         if (typeof row['name'] !== 'string') {
             continue;
         }
-        const name = row['name'].trim().slice(0, MODE_NAME_MAX);
+        let name = row['name'].trim().slice(0, MODE_NAME_MAX);
         if (!name) {
             continue;
         }
+        // Shipped-colliding NAMES (ids live in the separate `custom-<slug>`
+        // namespace, so comparing the id against SHIPPED_IDS could never
+        // match -- compare the label instead, matching the save path's
+        // `isDuplicateName` discipline) are renamed, not dropped
+        // (theia-pane-hosting-04).
+        if (isShippedLabel(name)) {
+            const to = renamedCustomModeName(name, candidate =>
+                isShippedLabel(candidate) || seen.has(customModeIdFor(candidate)) || stored.has(customModeIdFor(candidate)));
+            renamed.push({ from: name, to });
+            row['name'] = to;
+            name = to;
+        }
         const id = customModeIdFor(name);
-        // Shipped-colliding NAMES are duplicates (ids live in the separate
-        // `custom-<slug>` namespace, so comparing the id against SHIPPED_IDS
-        // could never match -- compare the label instead, matching the save
-        // path's `isDuplicateName` discipline).
-        if (SHIPPED_MODES.some(descriptor => descriptor.label.toLowerCase() === name.toLowerCase()) || seen.has(id)) {
+        if (seen.has(id)) {
             continue;
         }
         seen.add(id);
@@ -215,16 +263,18 @@ function parseModeStore(raw: string): ParsedModeStore {
         // NG-035: `furniture` and `views` are optional so a row written before
         // them still loads; a `layout` from an older build is an unknown field
         // and drops as before.
+        // `statusBar` is optional too: before 2026-11-18 the furniture flag carried the status bar as well.
         customs.push({
             name,
             leftVisible: row['leftVisible'] as boolean,
             rightVisible: row['rightVisible'] as boolean,
             bottomVisible: row['bottomVisible'] as boolean,
             furniture: row['furniture'] === true,
+            statusBar: typeof row['statusBar'] === 'boolean' ? row['statusBar'] : row['furniture'] === true,
             views: parseModeViews(row['views']) ?? legacyModeViews(row['leftVisible'] as boolean),
         });
     }
-    return { ok: true, customs, badNames };
+    return { ok: true, customs, badNames, renamed, ...(renamed.length ? { migrated: JSON.stringify(record, undefined, 2) } : {}) };
 }
 
 @injectable()
@@ -259,7 +309,14 @@ export class ModeService implements FrontendApplicationContribution {
     protected lastGoodCustoms: CustomModeSnapshot[] = [];
     protected registeredCustomIds = new Set<string>();
     protected droppedCustomIds = new Set<string>();
+    /** theia-pane-hosting-04: the id a renamed custom mode had -> the id it has now. */
+    protected readonly renamedCustomIds = new Map<string, string>();
+    /** The tail of the modes.json write queue (writeStore). */
+    protected storeWrites: Promise<void> = Promise.resolve();
     protected customModesLoadedPromise: Promise<void> | undefined;
+    protected persistedModeReapplied = false;
+    /** Bumped by every activateMode; an earlier call that sees a newer value stops applying its rules. */
+    protected switchSeq = 0;
 
     onStart(): void {
         // Fire-and-forget: awaiting this read here re-enters the boot-chain
@@ -316,6 +373,10 @@ export class ModeService implements FrontendApplicationContribution {
      */
     async activateMode(id: string): Promise<void> {
         const target = this.resolveTarget(id);
+        // Stock serialises only the perspective swap; the steps after each await
+        // below are skipped once a newer switch has started, so an earlier call
+        // cannot apply its panels, furniture and attribute over the later mode.
+        const seq = ++this.switchSeq;
         // Unguarded on purpose, and the fallback switch that used to sit in a
         // catch here is gone with the catch: stock's doSwitchPerspective returns
         // silently for an already-active id (perspective-service.js:114-116) and
@@ -327,6 +388,9 @@ export class ModeService implements FrontendApplicationContribution {
         // reject -- the catch could never run, and the 'browsing' retry inside
         // it was unreachable code claiming to be a safety net.
         await this.perspectives.switchPerspective(target);
+        if (seq !== this.switchSeq) {
+            return;
+        }
         const rules = this.rulesFor(target);
         // NG-035: dock the mode's views before any panel opens or closes.
         // ensureInArea is additive (see its note below), and stock's
@@ -336,6 +400,10 @@ export class ModeService implements FrontendApplicationContribution {
                 await this.ensureInArea(viewId, area);
             }
         }
+        if (seq !== this.switchSeq) {
+            return;
+        }
+        this.detachOtherModesViews(rules);
         // collapse() floats a promise (expand is sync void): attach the
         // no-op catch so a shutdown-time rejection is silence, not noise.
         if (rules.left === 'open') {
@@ -353,15 +421,20 @@ export class ModeService implements FrontendApplicationContribution {
         } else if (rules.bottom === 'closed') {
             await this.shell.collapsePanel('bottom');
         }
+        if (seq !== this.switchSeq) {
+            return;
+        }
         if (rules.organising) {
             openOrganisingSlot();
         } else {
             closeOrganisingSlot();
         }
         // 14-UI-SPEC per-mode furniture (amended 2026-09-08): a mode's
-        // `furniture` rule decides whether it keeps the icon rails and the
-        // status bar (Coding's shipped row does);
-        // Browsing is a browser and Organising is a full-screen canvas.
+        // `furniture` rule decides whether it keeps the icon rails, and its
+        // `statusBar` rule whether it keeps Theia's status bar (Coding's
+        // shipped row keeps both; Orca keeps the rails for its side panels and
+        // not the bar, 2026-11-18); Browsing is a browser and Organising is a
+        // full-screen canvas.
         //
         // Not CSS. Lumino positions both absolutely, so `display: none` hides
         // them while their space stays reserved -- measured live 2026-09-08,
@@ -382,7 +455,7 @@ export class ModeService implements FrontendApplicationContribution {
         // our URL row shares it, so hiding the menubar alone leaves the main
         // area at y=72 with 32px of dead space above it. It is solved by the
         // strip relocation, which moves the bar out of the top panel anyway.
-        this.statusBarWidget.setHidden(!rules.furniture);
+        this.statusBarWidget.setHidden(!rules.statusBar);
         // A collapsed side stays hidden: with the icons across its top there
         // is no rail to show (TopTabsSidePanelHandler).
         this.shell.leftPanelHandler.container.setHidden(!rules.furniture || this.shell.leftPanelHandler.dockPanel.isHidden);
@@ -391,6 +464,28 @@ export class ModeService implements FrontendApplicationContribution {
         this.shell.rightPanelHandler.container.setHidden(!rules.furniture || this.shell.rightPanelHandler.dockPanel.isHidden);
 
         publishModeAttribute(target);
+    }
+
+    /**
+     * Research A5 (measured false in 65-05): a revisited mode's saved layout detaches stray side views
+     * (perspective-service.js detachStrayWidgets), but a first visit only adds (applyViewPlacements), so a view
+     * another shipped mode's row docks (the Orca containers) stayed docked in a mode whose row does not list it.
+     * Those views are detached the way stock detaches strays (parent = null, never disposed), and the owning
+     * mode's ensureInArea docks the same widget again. Coding's views are the stock IDE layout's own (Explorer),
+     * which the shell docks in every mode and view: URIs reopen through openView, so they are left alone.
+     */
+    protected detachOtherModesViews(rules: ModeRules): void {
+        for (const area of ['left', 'right'] as const) {
+            const ide = new Set(SHIPPED_MODE_RULES.coding.views[area]);
+            const owned = new Set(Object.values(SHIPPED_MODE_RULES).flatMap(row => row.views[area]).filter(id => !ide.has(id)));
+            for (const widget of this.shell.getWidgets(area)) {
+                const factoryId = this.widgetManager.getDescription(widget)?.factoryId;
+                if (factoryId && owned.has(factoryId) && !rules.views[area].includes(factoryId)) {
+                    // eslint-disable-next-line no-null/no-null
+                    widget.parent = null;
+                }
+            }
+        }
     }
 
     /**
@@ -439,6 +534,26 @@ export class ModeService implements FrontendApplicationContribution {
         return this.customModesLoadedPromise ?? Promise.resolve();
     }
 
+    /**
+     * theia-pane-hosting-04: every write of modes.json goes through one queue, in call order, so the load-time
+     * write-back of a renamed row can never land after (and overwrite) a later save. A failed write rejects its own
+     * caller only; the queue goes on.
+     */
+    protected writeStore(text: string): Promise<void> {
+        const write = this.storeWrites.then(() => this.fileService.write(this.modesUri, text)).then(() => undefined);
+        this.storeWrites = write.catch(() => undefined);
+        return write;
+    }
+
+    /**
+     * theia-pane-hosting-04: the id a stored mode id stands for now. A custom mode renamed because a shipped mode
+     * took its name keeps its old id in saved Setups, the session snapshot and the persisted layout; this maps it to
+     * the renamed mode's id. Any other id is returned unchanged.
+     */
+    resolveModeId(id: string): string {
+        return this.renamedCustomIds.get(id) ?? id;
+    }
+
     hasCustomMode(id: string): boolean {
         return this.lastGoodCustoms.some(row => customModeIdFor(row.name) === id);
     }
@@ -457,19 +572,23 @@ export class ModeService implements FrontendApplicationContribution {
             void this.flash('A mode with this name already exists. Choose a different name.');
             return;
         }
+        const active = this.resolveTarget(this.safeActiveId() ?? '');
         const row: CustomModeSnapshot = {
             name,
             leftVisible: this.shell.isExpanded('left'),
             rightVisible: this.shell.isExpanded('right'),
             bottomVisible: this.shell.isExpanded('bottom'),
             // NG-035: the layout, not only the three flags -- which views sit in
-            // which side area, and whether the IDE furniture is showing.
-            furniture: !this.statusBarWidget.isHidden,
+            // which side area, and whether the IDE furniture is showing. The
+            // furniture is the current mode's rule: the status bar no longer
+            // stands for it (the Orca mode keeps the rails without the bar).
+            furniture: this.rulesFor(active).furniture,
+            statusBar: !this.statusBarWidget.isHidden,
             views: { left: this.viewsIn('left'), right: this.viewsIn('right'), bottom: this.viewsIn('bottom') },
         };
         const customs = [...this.lastGoodCustoms, row];
         try {
-            await this.fileService.write(this.modesUri, JSON.stringify({ version: MODES_STORE_VERSION, customs }, undefined, 2));
+            await this.writeStore(JSON.stringify({ version: MODES_STORE_VERSION, customs }, undefined, 2));
         } catch {
             void this.flash('PowerBrowser could not save this mode. Your panels are unchanged — try again.');
             return;
@@ -506,6 +625,7 @@ export class ModeService implements FrontendApplicationContribution {
                 right: custom.rightVisible ? 'open' : 'closed',
                 bottom: custom.bottomVisible ? 'open' : 'closed',
                 furniture: custom.furniture,
+                statusBar: custom.statusBar,
                 organising: false,
                 views: custom.views,
             };
@@ -545,10 +665,14 @@ export class ModeService implements FrontendApplicationContribution {
         } catch {
             return;
         }
-        window.setTimeout(() => {
+        // A newer notice restarts the timer, so an older one cannot remove it early.
+        window.clearTimeout(this.flashTimer);
+        this.flashTimer = window.setTimeout(() => {
             void this.statusBar.removeElement(id).catch(() => undefined);
         }, 4000);
     }
+
+    protected flashTimer = 0;
 
     protected registerCustom(row: CustomModeSnapshot): void {
         const id = customModeIdFor(row.name);
@@ -638,10 +762,25 @@ export class ModeService implements FrontendApplicationContribution {
         for (const bad of parsed.badNames) {
             void this.flash(`PowerBrowser couldn't load the "${bad}" mode. Browsing is shown instead.`);
         }
+        // theia-pane-hosting-04: a renamed row is written back once (only its name changes), the persisted active
+        // mode follows it, and the notice names both names.
+        for (const { from, to } of parsed.renamed) {
+            this.renamedCustomIds.set(customModeIdFor(from), customModeIdFor(to));
+            void this.flash(`PowerBrowser now has its own "${from}" mode, so your "${from}" mode is now called "${to}".`);
+        }
+        if (parsed.migrated !== undefined) {
+            this.writeStore(parsed.migrated).catch(() => {
+                console.info('[@powerbrowser/modes] a renamed custom mode was not written back; it is renamed again at the next launch');
+            });
+        }
         const active = this.safeActiveId();
         if (active !== undefined && this.droppedCustomIds.has(active)) {
             void this.activateMode('browsing');
-        } else {
+        } else if (!this.persistedModeReapplied) {
+            // The persisted id is the mode the last quit stored (storeLayout runs
+            // only at the quit flush), so it is re-applied once per launch: on a
+            // later reload it would undo the user's switches of this session.
+            this.persistedModeReapplied = true;
             void this.reapplyPersistedMode();
         }
     }
@@ -708,6 +847,10 @@ export class ModeService implements FrontendApplicationContribution {
         if (typeof persistedId !== 'string') {
             return;
         }
+        await this.reapplyMode(this.resolveModeId(persistedId));
+    }
+
+    protected async reapplyMode(persistedId: string): Promise<void> {
         if (this.registeredCustomIds.has(persistedId) && !this.droppedCustomIds.has(persistedId)) {
             if (this.safeActiveId() !== persistedId) {
                 await this.activateMode(persistedId);

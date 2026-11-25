@@ -72,6 +72,22 @@
  *     excluded from both id sets -- the same exclusion chrome-bar's countTabs
  *     makes, for the same reason, and read from the same single definition.
  *
+ * ORCA SEEDS (Phase 64, P64-19, P64-27, P64-35; interface C9). After the
+ * welcome seed, one hosted chat tab and one hosted terminal tab are seeded
+ * through powerbrowser.orca.newChat and powerbrowser.orca.newTerminal, inside
+ * scripts/lib/orca-tabs-live.mjs's shared session (PowerBrowser's own orcad, the
+ * booted pane bundle, its worktree selected, the stub claude on the launched
+ * PowerBrowser's PATH; that relative lib import is the one exception to the rule
+ * below, and it runs only when the seeds do). Both must be main-area tabs before the walk,
+ * so the set-equality and isAttached assertions cover them on every hop,
+ * the Orca mode's included. While theia/extensions/orca-panes is absent the
+ * seeds are skipped: the run still walks the modes, and, if nothing failed,
+ * ends with the one line "verify-mode-switch-tabs-live: SKIP -- Orca seeds did
+ * not run ..." and exit 77 (SKIP-PROTOCOL.md), never a PASS; present but a
+ * command unregistered or no hosted widget within 5000 ms is red. The plant
+ * 'orca-vanish' disposes an Orca seed (the welcome seed stands in while there
+ * is none) after the first hop, and the next hop must name it LOST.
+ *
  * NON-VACUITY. A derivation that yields nothing fails as a broken instrument:
  * zero shipped ids, zero registration sinks, an unreadable seed, and -- the one
  * that matters most -- a seed that produced ZERO main-area widgets. A check
@@ -96,7 +112,7 @@
  * `document`, no shell and no widget to observe in a bare Node tier, and on a
  * tree with no `objdir/` it fails at the binary's existence check rather than
  * degrading into a text scan. Register it in the full set, never the commit
- * gate. One clean run is roughly 30 seconds; `--self-test` boots six sessions
+ * gate. One clean run is roughly 30 seconds; `--self-test` boots seven sessions
  * and takes about three minutes.
  *
  * WHAT IT DOES NOT PROVE. It observes one profile, one boot and one walk. It
@@ -105,6 +121,12 @@
  * hydrate), nothing about custom modes unless the live app happens to carry
  * some, and nothing about what a human sees -- a widget can be attached and
  * still be painted wrong.
+ *
+ * THE LIVE LOCK (scripts/lib/live-lock.mjs; SKIP-PROTOCOL.md, "The live lock"). The row and its --self-test, which both boot browsers, call
+ * holdLiveLock before they launch anything. They go on without taking the lock only when /proc/locks shows it held by the driver's holder
+ * (PB_LIVE_LOCK_HOLDER: pid and start ticks) or by an ancestor (flock <git common dir>/pb-live.lock node <row>); an inherited
+ * PB_LIVE_LOCK_HELD=1 with neither is a FAIL by name; with nothing set they take the lock themselves and wait, naming the holder.
+ * --self-test is a full-tier row.
  *
  * Usage:
  *   node scripts/verify-mode-switch-tabs-live.mjs
@@ -115,10 +137,11 @@
  * only (D-69).
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withFirefoxPage } from './lib/firefox-bidi.mjs';
+import { verdictExit } from './lib/skip-verdict.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const NAME = 'verify-mode-switch-tabs-live';
@@ -128,6 +151,10 @@ const ORGANISING_REL = 'theia/extensions/modes/src/browser/organising-widget.ts'
 const COMMANDS_REL = 'theia/extensions/modes/src/browser/modes-commands.ts';
 const SEED_REL = 'theia/extensions/branding/src/browser/powerbrowser-welcome-contribution.ts';
 const EXTENSIONS_REL = 'theia/extensions';
+/** Phase 64 (P64-19, P64-35): the Orca seeds exist only once lane p64-02's extension is in the tree. */
+const ORCA_PANES_REL = 'theia/extensions/orca-panes';
+const ORCA_PANE_FACTORY_ID = 'powerbrowser.orca-pane';
+const ORCA_SEED_COMMANDS = ['powerbrowser.orca.newChat', 'powerbrowser.orca.newTerminal'];
 
 /** Stock source, read never written: the 'default' perspective id is upstream's, not ours. */
 const STOCK_PERSPECTIVE_JS_REL = 'theia/node_modules/@theia/core/lib/browser/perspective-service.js';
@@ -353,11 +380,14 @@ function protocolExpression(derived, plant) {
         activateCommandId: derived.activateCommandId,
         seedId: derived.seedId,
         unaccountedId: UNACCOUNTED_PLANT_ID,
+        orcaSeeds: existsSync(join(REPO_ROOT, ORCA_PANES_REL)),
+        orcaFactoryId: ORCA_PANE_FACTORY_ID,
+        orcaSeedCommands: ORCA_SEED_COMMANDS,
         plant,
     });
     return `(async () => { ${GET_BY_NAME}
     const cfg = ${cfg};
-    const report = { failures: [], notes: [], steps: [], consoleErrors: [] };
+    const report = { failures: [], notes: [], steps: [], consoleErrors: [], skips: [] };
     const fail = message => report.failures.push(message);
     try {
         const container = window.theia.container;
@@ -464,6 +494,27 @@ function protocolExpression(derived, plant) {
             fail('could not seed a main-area widget from ' + cfg.seedId + ': ' + String(e));
         }
 
+        // --- Orca seeds (Phase 64): one hosted chat, one hosted terminal ----
+        const orcaSeeds = [];
+        if (!cfg.orcaSeeds) {
+            report.skips.push('Orca seeds did not run (lane p64-02 not merged: theia/extensions/orca-panes is absent). Next step: merge that lane, then run scripts/verify-platform.sh --only gui07-mode-switch-tabs-live');
+        } else {
+            for (const id of cfg.orcaSeedCommands) {
+                report.steps.push('seed ' + id);
+                if (!commands.getCommand(id)) { fail('Orca seed command ' + id + ' is not registered'); continue; }
+                const known = new Set(widgets.getWidgets(cfg.orcaFactoryId).map(w => w.id));
+                await commands.executeCommand(id);
+                let added;
+                for (const end = Date.now() + 5000; !added && Date.now() < end; await new Promise(r => setTimeout(r, 100))) {
+                    added = widgets.getWidgets(cfg.orcaFactoryId).find(w => !known.has(w.id));
+                }
+                if (!added) { fail('Orca seed ' + id + ' gave no hosted widget within 5000 ms'); continue; }
+                orcaSeeds.push(added);
+            }
+            await settle();
+            report.notes.push('Orca seeds: ' + orcaSeeds.map(w => w.id).join(', '));
+        }
+
         const baselineWidgets = widgetsIn('main');
         const baselineMain = idsIn('main');
         const baselineBottom = idsIn('bottom');
@@ -471,6 +522,9 @@ function protocolExpression(derived, plant) {
         report.baselineBottom = baselineBottom;
         if (baselineMain.length === 0) {
             fail('the seed produced ZERO main-area widgets -- this run had nothing to lose, so a clean result would prove nothing about whether a mode switch destroys tabs');
+        }
+        for (const w of orcaSeeds) {
+            if (!baselineMain.includes(w.id)) fail("the Orca seed '" + w.id + "' is not a main-area tab before the walk");
         }
         if (!baselineMain.includes(cfg.seedId)) {
             fail("the seeded widget '" + cfg.seedId + "' is not in the main area after seeding -- the seed did not take, so the walk below would measure the wrong thing");
@@ -509,8 +563,18 @@ function protocolExpression(derived, plant) {
         }
 
         // --- measured walk: every hop is a SECOND visit --------------------
+        let hops = 0;
         for (const id of [...cfg.shipped, cfg.defaultId]) {
             await activate(id);
+            if (cfg.plant === 'orca-vanish' && ++hops === 1) {
+                // After the first hop, so only a later hop's measurement can see it go.
+                const target = orcaSeeds[0] || baselineWidgets.find(w => w.id === cfg.seedId);
+                if (target) {
+                    target.dispose();
+                    report.notes.push('PLANT orca-vanish: ' + target.id + ' disposed after the first hop' + (orcaSeeds.length ? '' : ' (stand-in: no Orca seed in this tree)'));
+                }
+                continue;
+            }
             for (const [area, baseline] of [['main', baselineMain], ['bottom', baselineBottom]]) {
                 const live = idsIn(area);
                 const lost = baseline.filter(x => !live.includes(x));
@@ -548,15 +612,36 @@ async function runProtocol(derived, plant) {
     try {
         return await drive(derived, plant);
     } catch (error) {
-        return { driveError: String(error), failures: [], notes: [], steps: [] };
+        return { driveError: String(error), failures: [], notes: [], steps: [], skips: [] };
     }
 }
 
 async function drive(derived, plant) {
+    if (existsSync(join(REPO_ROOT, ORCA_PANES_REL))) {
+        // The Orca seeds need PowerBrowser's own orcad and a booted pane bundle: the shared Orca tabs session
+        // (it puts the stub claude on the launched PowerBrowser's PATH only). Its worktree is selected through
+        // the bundle's setActiveWorktree, as an activated Orca tab does (P64-23), and the Theia frame is focused.
+        const lib = await import('./lib/orca-tabs-live.mjs');
+        const { pollFor } = await import('./lib/pb-relaunch.mjs');
+        return lib.withOrcaTabsSession({ log: () => {} }, async (ctx) => {
+            const listed = ctx.orca('worktree', 'list');
+            const id = (listed?.result?.worktrees ?? []).find((w) => String(w.id).endsWith(`::${ctx.repo}`))?.id;
+            if (!id) throw new Error('the session worktree is not in the Orca CLI list');
+            await ctx.bundle(`(m.setActiveWorktree(${JSON.stringify(id)}), true)`);
+            await ctx.focusTheiaFrame();
+            const evaluate = (expr) => ctx.app.evaluate(expr);
+            const waitFor = (expr, { timeoutMs = 60000 } = {}) => pollFor(async () => ((await evaluate(expr)) ? true : null), timeoutMs, 'a frontend condition');
+            return driveIn(evaluate, waitFor, derived, plant);
+        });
+    }
     // WINDOWS 14: empty URL -- the shell's own supervised frontend is the app
     // under test, and a URL on the command line would open a redundant stock
     // window beside it.
-    return withFirefoxPage('', async ({ evaluate, waitFor }) => {
+    return withFirefoxPage('', ({ evaluate, waitFor }) => driveIn(evaluate, waitFor, derived, plant));
+}
+
+async function driveIn(evaluate, waitFor, derived, plant) {
+    {
         await waitFor('window.theia && window.theia.container ? true : false', { timeoutMs: 60000 });
         await waitFor('!!document.querySelector("#theia-app-shell")', { timeoutMs: 60000 });
         // Waiting for the app's OWN 'ready' state, not for a shell selector and
@@ -574,7 +659,7 @@ async function drive(derived, plant) {
         } catch (e) { return false; } })()`, { timeoutMs: 60000 });
         const raw = await evaluate(protocolExpression(derived, plant));
         return JSON.parse(raw);
-    });
+    }
 }
 
 /** Tree-side assertions over one live report. @returns {string[]} */
@@ -649,8 +734,12 @@ async function main() {
         console.error(`${NAME}: FAIL -- ${failures.length} assertion(s) failed`);
         return 1;
     }
-    console.log(`${NAME}: PASS -- ${(report.baselineMain ?? []).length} main-area and ${(report.baselineBottom ?? []).length} bottom-area tab(s) survived every second-visit mode switch, attached`);
-    return 0;
+    // A part of the run that did not run because an input is absent is a partial run: SKIP, never PASS (SKIP-PROTOCOL.md).
+    const code = verdictExit(NAME, [], report.skips ?? []);
+    if (code === 0) {
+        console.log(`${NAME}: PASS -- ${(report.baselineMain ?? []).length} main-area and ${(report.baselineBottom ?? []).length} bottom-area tab(s) survived every second-visit mode switch, attached`);
+    }
+    return code;
 }
 
 /**
@@ -701,6 +790,12 @@ async function selfTest() {
             expect: 'APPEARED',
         },
         {
+            // Phase 64: a seeded tab (an Orca seed when the tree has one) vanishing after a hop.
+            name: 'Orca seed vanishes after a hop',
+            plant: 'orca-vanish',
+            expect: 'LOST',
+        },
+        {
             // Proves the upstream accounting did not widen the surplus
             // assertion into one that cannot fire.
             name: 'unaccounted perspective',
@@ -710,8 +805,19 @@ async function selfTest() {
     ];
 
     let failed = 0;
+    const skipped = [];
+    {
+        // The shared live-lock helper is still awaited on this row's live path (no browser).
+        const lib = await import('./lib/orca-tabs-live.mjs');
+        const liveLock = await import('./lib/live-lock.mjs');
+        for (const message of [...liveLock.lockWiringFails(NAME, import.meta.url), ...(lib.lockWiringPlantFails(liveLock.lockWiringFails).length ? [] : ['a script without the lock call was not caught'])]) {
+            console.error(`${NAME} --self-test: FAIL -- ${message}`);
+            failed++;
+        }
+    }
     for (const testCase of cases) {
         const report = await runProtocol(derived, testCase.plant);
+        for (const reason of report.skips ?? []) if (!skipped.includes(reason)) skipped.push(reason);
         const failures = assertReport(derived, report);
         if (report.driveError) {
             // Distinct from a plant that failed to go red: the session never
@@ -752,13 +858,23 @@ async function selfTest() {
         console.error(`${NAME} --self-test: FAIL -- ${failed} case(s) did not behave as required`);
         return 1;
     }
-    console.log(`${NAME} --self-test: PASS -- the clean control is green and all ${cases.length - 1} planted faults went red`);
-    return 0;
+    // A self-test that ran with a skipped input (no Orca seeds) did not cover the seed path: SKIP, not PASS.
+    const code = verdictExit(NAME, [], skipped);
+    if (code === 0) {
+        console.log(`${NAME} --self-test: PASS -- the clean control is green and all ${cases.length - 1} planted faults went red`);
+    }
+    return code;
 }
 
 const args = process.argv.slice(2);
 if (args.includes('--help')) {
     console.log(HELP.trimEnd());
     process.exit(0);
+}
+{
+    // Both modes launch a browser: the live lock first (scripts/lib/live-lock.mjs).
+    const { holdLiveLock } = await import('./lib/live-lock.mjs');
+    const locked = await holdLiveLock({ name: NAME, scriptUrl: import.meta.url, root: REPO_ROOT });
+    if (locked !== null) process.exit(locked);
 }
 process.exit(args.includes('--self-test') ? await selfTest() : await main());

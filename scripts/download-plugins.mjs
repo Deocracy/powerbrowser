@@ -16,12 +16,15 @@
 // system plugins and refuses packed files there, while the pin gate needs the packed bytes.
 // Anything else in <pluginsDir> is removed, so the folder Theia loads holds only pinned,
 // declared bytes.
+// Then every bundled-extensions/<folder>/ is assembled into <pluginsDir>/.user/<id>/ (D-30): a
+// built-in plugin cannot be uninstalled, and the dot keeps .user out of Theia's system scan; the
+// @powerbrowser/bundled-extensions seed copies it into the profile as a user plugin instead.
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { basename, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { REPO_ROOT, resolveConfig } from './generate.mjs';
 
 const NAME = 'download-plugins';
@@ -79,7 +82,7 @@ for (const d of declared) {
         : `${d.id}: the ${d.entry.source} archive has sha256 ${actual}, the manifest pins ${d.entry.sha256} -- nothing was installed for it`);
 }
 
-const keep = new Set(declared.flatMap(d => [basename(d.slot), d.id]));
+const keep = new Set([...declared.flatMap(d => [basename(d.slot), d.id]), '.user']);
 for (const name of readdirSync(pluginsDir)) {
     if (!keep.has(name)) rmSync(join(pluginsDir, name), { recursive: true, force: true });
 }
@@ -99,6 +102,61 @@ for (const d of declared) {
         die(`${d.id}: unpacking its ${d.entry.source} archive failed -- ${err.message}`);
     }
     console.log(`${NAME}: ${d.id} (${d.entry.source}) installed, bytes match the manifest`);
+}
+
+// Bundled extensions (D-30, P68-38): each folder is built in a temporary sibling and renamed
+// into place, so a failure leaves no half-built plugin for the seed to copy.
+const userDir = join(pluginsDir, '.user');
+const bundledRoot = join(REPO_ROOT, 'bundled-extensions');
+const bundled = existsSync(bundledRoot)
+    ? readdirSync(bundledRoot).filter(n => existsSync(join(bundledRoot, n, 'package.json'))).sort()
+    : [];
+mkdirSync(userDir, { recursive: true });
+const bundledIds = new Set();
+for (const folder of bundled) {
+    const src = join(bundledRoot, folder);
+    const manifest = JSON.parse(readFileSync(join(src, 'package.json'), 'utf8'));
+    const id = `${manifest.publisher}.${manifest.name}`;
+    bundledIds.add(id);
+    const tmp = mkdtempSync(join(userDir, `.${id}-`));
+    const scratch = mkdtempSync(join(tmpdir(), 'pb-bundled-'));
+    try {
+        // npm ci verifies every tarball against the tracked lock's sha512; nothing from the
+        // package runs (--ignore-scripts, and the inert script shell pack() uses).
+        for (const f of ['package.json', 'package-lock.json']) copyFileSync(join(src, f), join(scratch, f));
+        const r = runNpm(['ci', '--ignore-scripts', '--script-shell', 'true', '--omit=optional', '--legacy-peer-deps', '--no-audit', '--no-fund'],
+            { cwd: scratch, encoding: 'utf8' });
+        if (r.status !== 0) throw new Error(`npm ci failed: ${r.stderr || r.error?.message}`);
+        const lock = JSON.parse(readFileSync(join(src, 'package-lock.json'), 'utf8'));
+        const want = Object.entries(lock.packages ?? {}).filter(([k, v]) => k && !v.optional).map(([k]) => k).sort();
+        const got = installedPackages(join(scratch, 'node_modules')).sort();
+        if (want.join('\n') !== got.join('\n')) {
+            throw new Error(`node_modules holds ${got.join(', ') || 'nothing'}, the lock's non-optional packages are ${want.join(', ')}`);
+        }
+        const [dep] = Object.keys(manifest.dependencies ?? {});
+        const theirs = readFileSync(join(scratch, 'node_modules', dep, 'LICENSE.md'), 'utf8');
+        if (!readFileSync(join(src, 'LICENSE.md'), 'utf8').includes(theirs)) {
+            throw new Error(`LICENSE.md does not quote ${dep}'s LICENSE.md byte for byte`);
+        }
+        mkdirSync(join(tmp, 'extension'));
+        for (const f of ['package.json', 'LICENSE.md', 'README.md']) copyFileSync(join(src, f), join(tmp, 'extension', f));
+        cpSync(join(scratch, 'node_modules'), join(tmp, 'extension', 'node_modules'),
+            { recursive: true, filter: p => !lstatSync(p).isSymbolicLink() });
+        // Theia reads <root>/extension/package.json only beside a VSIX manifest
+        // (plugin-vscode-directory-handler.js resolveFromVSIX), so the folder carries one.
+        writeFileSync(join(tmp, 'extension.vsixmanifest'), vsixManifest(manifest));
+        rmSync(join(userDir, id), { recursive: true, force: true });
+        renameSync(tmp, join(userDir, id));
+    } catch (err) {
+        rmSync(tmp, { recursive: true, force: true });
+        die(`bundled-extensions/${folder}: assembling ${id} failed -- ${err.message}`);
+    } finally {
+        rmSync(scratch, { recursive: true, force: true });
+    }
+    console.log(`${NAME}: ${id} (bundled) assembled`);
+}
+for (const name of readdirSync(userDir)) {
+    if (!bundledIds.has(name)) rmSync(join(userDir, name), { recursive: true, force: true });
 }
 
 // I-2: a declared extension's undeclared dependencies would be fetched unpinned from
@@ -132,6 +190,40 @@ function readManifestOf(d) {
 }
 const MANIFEST_NAME_HINT = 'configuration.toml';
 
+// node_modules/<name> and node_modules/@scope/<name>, recursing into nested node_modules.
+function installedPackages(dir, prefix = 'node_modules') {
+    if (!existsSync(dir)) return [];
+    const out = [];
+    for (const name of readdirSync(dir)) {
+        if (name.startsWith('.')) continue;
+        const names = name.startsWith('@') ? readdirSync(join(dir, name)).map(n => `${name}/${n}`) : [name];
+        for (const n of names) {
+            out.push(`${prefix}/${n}`, ...installedPackages(join(dir, n, 'node_modules'), `${prefix}/${n}/node_modules`));
+        }
+    }
+    return out;
+}
+
+function vsixManifest(m) {
+    const x = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return `<?xml version="1.0" encoding="utf-8"?>
+<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">
+  <Metadata>
+    <Identity Language="en-US" Id="${x(m.name)}" Version="${x(m.version)}" Publisher="${x(m.publisher)}" />
+    <DisplayName>${x(m.displayName)}</DisplayName>
+    <Description xml:space="preserve">${x(m.description)}</Description>
+  </Metadata>
+  <Installation>
+    <InstallationTarget Id="Microsoft.VisualStudio.Code" />
+  </Installation>
+  <Dependencies />
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true" />
+  </Assets>
+</PackageManifest>
+`;
+}
+
 function sha256Of(path) {
     try {
         return createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -140,13 +232,30 @@ function sha256Of(path) {
     }
 }
 
+// npm as [command, leading args] (68-CR-02). On Windows npm is npm.cmd / npm.ps1, which spawnSync without a shell cannot
+// start (libuv tries only .com and .exe, and Node refuses .cmd without shell since CVE-2024-27980), so npm's own JS entry
+// runs under this Node instead: npm_execpath when it is npm-cli.js, else the npm the Windows Node install ships beside
+// node.exe. Elsewhere `npm` on PATH is an executable script and is spawned as before.
+function npmCommand() {
+    if (process.platform !== 'win32') return ['npm', []];
+    const fromEnv = process.env.npm_execpath;
+    const cli = fromEnv && /npm-cli\.js$/.test(fromEnv) ? fromEnv : join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    if (!existsSync(cli)) die(`npm's npm-cli.js is not at ${cli}, so npm cannot be run without a shell on Windows. Next step: run under the Node install that ships npm (setup-node does).`);
+    return [process.execPath, [cli]];
+}
+
+function runNpm(args, opts) {
+    const [cmd, lead] = npmCommand();
+    return spawnSync(cmd, [...lead, ...args], opts);
+}
+
 function pack(folder) {
     const out = mkdtempSync(join(tmpdir(), 'pb-pack-'));
     // None of the folder's scripts may run before its hash. --ignore-scripts stops prepack and
     // postpack, but npm 10's directory fetcher (pacote) runs `prepare` regardless, so the
     // script shell is `true`, which runs nothing. ponytail: POSIX `true`; on Windows a folder
     // with a prepare script fails the pack (fail-closed) until a no-op .cmd shell is added.
-    const r = spawnSync('npm', ['pack', folder, '--ignore-scripts', '--script-shell', 'true', '--pack-destination', out], { encoding: 'utf8' });
+    const r = runNpm(['pack', folder, '--ignore-scripts', '--script-shell', 'true', '--pack-destination', out], { encoding: 'utf8' });
     const file = r.status === 0 && readdirSync(out).find(n => n.endsWith('.tgz'));
     const bytes = file && readFileSync(join(out, file));
     rmSync(out, { recursive: true, force: true });

@@ -63,9 +63,8 @@ export const CHROME_BAR_CLEAR_HISTORY_COMMAND_ID = 'powerbrowser.chrome-bar.clea
 // Phase 33 plan 05 (MENU-03, D-12/D-13/D-14): the hamburger rows' commands, each also an Actions row.
 // New Window runs GUI-01's stock-window command (D-12: no second shell window).
 export const CHROME_BAR_NEW_WINDOW_COMMAND_ID = 'powerbrowser.chrome-bar.new-window';
-// Full Screen: the same id before and after Phase 35's fullscreen path lands (D-14); 35-07 runs it by CHROME_BAR_FULL_SCREEN_COMMAND.
+// Full Screen: the same id before and after Phase 35's fullscreen path lands (D-14); 35-07 runs it by this id.
 export const CHROME_BAR_FULL_SCREEN_COMMAND_ID = 'powerbrowser.chrome-bar.full-screen';
-export const CHROME_BAR_FULL_SCREEN_COMMAND = CHROME_BAR_FULL_SCREEN_COMMAND_ID;
 // The Phase 32 page tools had relay rows and widget methods but no command; each id runs that same tab method.
 export const CHROME_BAR_PRINT_COMMAND_ID = 'powerbrowser.chrome-bar.print';
 export const CHROME_BAR_SAVE_PAGE_COMMAND_ID = 'powerbrowser.chrome-bar.save-page';
@@ -295,6 +294,18 @@ export function openStockPage(page: string): void {
     openStockPagePath?.(page);
 }
 
+let repaintChromeBar: (() => void) | undefined;
+
+/** Set by the chrome bar widget: its print and save notices read tab flags that no state push carries. */
+export function setRepaintChromeBar(repaint: (() => void) | undefined): void {
+    repaintChromeBar = repaint;
+}
+
+/** PAGE-03/PAGE-08: runs a page tool whose failure notice the bar shows, then repaints the bar. */
+export function withBarRepaint<T>(run: Promise<T>): Promise<T> {
+    return run.finally(() => repaintChromeBar?.());
+}
+
 /**
  * GUI-02-owned navigable-tab predicate (13-04, flipped in 14.1-02): back,
  * forward, and reload all read enablement from this one export, and so do
@@ -482,12 +493,18 @@ export class ChromeBarCommandContribution implements CommandContribution {
         });
         // MENU-03 (D-13): the Phase 32 page tools, one tab method each -- the method the page relay's key runs.
         commands.registerCommand(CHROME_BAR_PRINT, {
-            execute: () => currentWebTab()?.print(),
+            execute: () => {
+                const tab = currentWebTab();
+                return tab ? withBarRepaint(tab.print()) : undefined;
+            },
             isEnabled: () => !!currentWebTab(),
             isVisible: () => true,
         });
         commands.registerCommand(CHROME_BAR_SAVE_PAGE, {
-            execute: () => currentWebTab()?.savePage(chooseSaveDestination),
+            execute: () => {
+                const tab = currentWebTab();
+                return tab ? withBarRepaint(tab.savePage(chooseSaveDestination)) : undefined;
+            },
             isEnabled: () => !!currentWebTab(),
             isVisible: () => true,
         });

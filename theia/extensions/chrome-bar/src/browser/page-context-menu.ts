@@ -23,7 +23,7 @@ import { CommandMenu, CommandRegistry, CompoundMenuNode, MenuNode, MenuPath, Mes
 import { FileDialogService } from '@theia/filesystem/lib/browser';
 import { WebTabChannel, WebTabOpenHandler, WebTabReply, WebTabWidget } from '@powerbrowser/tab-uris/lib/browser/web-tab';
 import { CHROME_BAR_COPY, appSubject } from './chrome-bar-copy';
-import { CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID, chooseSaveDestination } from './chrome-bar-commands';
+import { CHROME_BAR_BOOKMARK_PAGE_COMMAND_ID, chooseSaveDestination, withBarRepaint } from './chrome-bar-commands';
 
 export const PAGE_CONTEXT_MENU_PATH: MenuPath = ['powerbrowser-page-context-menu'];
 
@@ -58,7 +58,7 @@ const FRONTEND_ROWS: Readonly<Record<string, FrontendRow>> = Object.freeze({
     'context-reload': { run: widget => widget.reload() },
     'context-stop': { run: widget => widget.stop() },
     'context-bookmarkpage': { run: (widget, menu) => menu.bookmarkThisPage(widget), keepsFocus: true },
-    'context-savepage': { run: widget => widget.savePage(chooseSaveDestination) },
+    'context-savepage': { run: widget => withBarRepaint(widget.savePage(chooseSaveDestination)) },
     'context-viewsource': { run: widget => widget.viewSource() },
 });
 

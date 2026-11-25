@@ -15,7 +15,14 @@
 #   - refreshes precomplete from Contents/Resources, because full MARs are made from it;
 #   - replaces the objdir's .app with the copy only when every check has passed. A failed run leaves
 #     the .app exactly as mach wrote it, and removes its own working copy.
+# A third mode, orca-universal ARM X64 OUT (P68-31), merges two thin hosted Orca trees (macos-orca-arm64 and
+# macos-orca-x64, admitted by the caller) into one universal <GreD>/orca at OUT; see orca_universal() below.
+# The per-architecture mode also stages the admitted macos-orca-<arch> artifact (PB_MAC_ORCA_DIR, its
+# SHA256SUMS digest in PB_MAC_ORCA_SUMS_SHA256) as Contents/Resources/orca, and universal merges both.
+# That artifact is tree.tar plus BUILD_ROOT (68-CR-03: an artifact keeps no file mode, a tar does); the tree is
+# unpacked with tar -xpf after the admission, so every executable keeps its mode through cp -a below.
 # Usage: bash powerbrowser/packaging/package-macos.sh aarch64|x86_64|universal
+#        bash powerbrowser/packaging/package-macos.sh orca-universal ARM X64 OUT
 # Run from the repo root in the firefox-macos dev shell (nix develop .#firefox-macos) after a Theia
 # `yarn build` in theia/ on a matching host. Nothing here needs a Developer ID or an Apple account.
 set -euo pipefail
@@ -30,8 +37,10 @@ arch_row() {
     esac
 }
 UNIFY_ORDER="x86_64 aarch64" # unify.sh order: x86_64 is app1 (merged into), aarch64 is app2
-if [ "$ARCH" != universal ] && ! arch_row "$ARCH"; then
-    echo "package-macos: FAIL -- usage: package-macos.sh aarch64|x86_64|universal (got '${ARCH}')" >&2; exit 2
+if [ "$ARCH" = orca-universal ]; then
+    [ "$#" -eq 4 ] || { echo "package-macos: FAIL -- usage: package-macos.sh orca-universal ARM X64 OUT (got $(( $# - 1 )) arguments)" >&2; exit 2; }
+elif [ "$ARCH" != universal ] && ! arch_row "$ARCH"; then
+    echo "package-macos: FAIL -- usage: package-macos.sh aarch64|x86_64|universal|orca-universal ARM X64 OUT (got '${ARCH}')" >&2; exit 2
 fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OBJ="$ROOT/objdir-macos-$ARCH"
@@ -39,7 +48,61 @@ MOZCONFIG_TRACKED="$ROOT/powerbrowser/packaging/mozconfig-macos-$ARCH"
 APP="$ROOT/theia/applications/browser"
 LIPO="${LIPO:-llvm-lipo}"
 fail() { echo "package-macos: FAIL -- $*" >&2; exit 1; }
+# 68-WR-02: no staged file may name the build checkout. grep exits 1 for no match and 2 for an error
+# (an unreadable file, a missing target such as a mistyped directory, an I/O error); an error is a
+# failure, not a pass, as check-win-sidecar.sh purge states. $1 names the tree in the message.
+checkout_grep() {
+    local what="$1" hits rc=0
+    shift
+    hits="$(grep -rlF -e "$ROOT/" -- "$@")" || rc=$?
+    [ "$rc" -le 1 ] || fail "grep could not read $what while looking for $ROOT/ (exit $rc)"
+    [ -z "$hits" ] || fail "$what still carries a checkout path: $(head -n1 <<<"$hits")"
+}
 command -v "$LIPO" >/dev/null || fail "$LIPO not found; enter nix develop .#firefox-macos (llvm supplies llvm-lipo), or set LIPO to a lipo that supports -archs"
+
+# --- orca-universal: one <GreD>/orca from two thin Orca trees (P68-31) ----------------------------
+# The merge plan comes from scripts/lib/orca-artifacts.mjs, which derives the arch-named pairs from Orca's own
+# ORCAD_RIPGREP_ARTIFACTS and orcadAgentBrowserNativeName (read from orca/ at the pin, never copied here):
+#   pair     ARM-name X64-name: lipo -create the two, and stage the fat file under both names, as the
+#            better-sqlite3 prebuild pair is below (the loader picks the name for its own arch);
+#   inplace  a same-name thin Mach-O in both trees: lipo -create in place;
+#   same     every other file, byte-identical in both trees (the plan refuses one that is not).
+# Only package.json, out/orcad and out/web are carried to OUT; BUILD_ROOT, SHA256SUMS and the prebuild
+# manifest stay in the admitted artifacts. Needs only lipo and node, so the hosted ubuntu job can run it.
+orca_universal() {
+    local arm="$1" x64="$2" out="$3" plan kind a x rel
+    test -f "$arm/package.json" && test -f "$x64/package.json" || fail "orca-universal: $arm or $x64 is not an Orca tree (no package.json)"
+    test -f "$ROOT/orca/src/shared/orcad-artifacts.ts" || fail "orca-universal: orca/ is not fetched, so the pair table cannot be derived; run bash scripts/fetch-orca.sh first"
+    plan="$(node "$ROOT/scripts/lib/orca-artifacts.mjs" macos-merge-plan "$arm" "$x64" "$ROOT/orca")" \
+        || fail "orca-universal: the merge plan refused the two trees: $(grep '^FAIL' <<< "$plan" | cut -f2 | head -5 | tr '\n' ' ')"
+    grep -q '^pair' <<< "$plan" || fail "orca-universal: the merge plan holds no arch-named pair (Orca's artifact tables moved)"
+    rm -rf "$out"
+    mkdir -p "$out/out"
+    cp -a "$arm/package.json" "$out/package.json"
+    cp -a "$arm/out/orcad" "$arm/out/web" "$out/out/"
+    bash "$ROOT/powerbrowser/packaging/stage-orca-licence.sh" "$ROOT" "$out"
+    while IFS=$'\t' read -r kind a x; do
+        case "$kind" in
+            pair)
+                "$LIPO" -create "$arm/$a" "$x64/$x" -output "$out/$a.universal" || fail "lipo could not merge the Orca pair $a + $x"
+                chmod --reference="$arm/$a" "$out/$a.universal"
+                mv "$out/$a.universal" "$out/$a"
+                mkdir -p "$(dirname "$out/$x")"
+                cp -p "$out/$a" "$out/$x" ;;
+            inplace)
+                "$LIPO" -create "$out/$a" "$x64/$a" -output "$out/$a.universal" || fail "lipo could not merge the Orca pair $a"
+                chmod --reference="$out/$a" "$out/$a.universal"
+                mv "$out/$a.universal" "$out/$a" ;;
+            same) ;;
+            *) fail "orca-universal: unknown merge-plan action '$kind'" ;;
+        esac
+    done <<< "$plan"
+    echo "package-macos: orca-universal wrote $out ($(grep -c '^pair' <<< "$plan") arch-named pair(s), $(grep -c '^inplace' <<< "$plan") in-place merge(s))"
+}
+if [ "$ARCH" = orca-universal ]; then
+    orca_universal "$2" "$3" "$4"
+    exit 0
+fi
 
 # The target mozconfig expands $MOZ_FETCHES_DIR into the SDK and DMG tool paths when mach loads it.
 # Unset, those paths become /MacOSX26.5.sdk and /hfsplus/newfs_hfs, and configure fails later and less
@@ -138,7 +201,9 @@ universal() {
         cp -a "${bundles[0]}" "$WORK/$arch/"
         res="$WORK/$arch/$appname/Contents/Resources"
         test -d "$res/theia" && test -f "$res/node/bin/node" || fail "${bundles[0]} carries no staged sidecar; run package-macos.sh $arch first"
+        test -f "$res/orca/package.json" || fail "${bundles[0]} carries no staged Orca tree (Contents/Resources/orca); run package-macos.sh $arch with PB_MAC_ORCA_DIR first"
         mv "$res/theia" "$res/node" "$WORK/sidecar-$arch/"
+        mv "$res/orca" "$WORK/orca-$arch"
         fetch_pin "$NODE_KEY"
         mkdir -p "$WORK/pin-$arch"
         tar -xzf "$ARCHIVE" -C "$WORK/pin-$arch" --strip-components=1 "node-$NODE_VERSION-$NODE_BIN_DIR/bin/node" \
@@ -168,7 +233,7 @@ universal() {
                 /*) "$INSTALL_NAME_TOOL" -delete_rpath "$rel" "$f" || fail "could not delete the rpath $rel from $f" ;;
             esac
         done < <("$OTOOL" -l "$f" | awk '$1 == "cmd" { r = ($2 == "LC_RPATH") } r && $1 == "path" { sub(/^ *path /, ""); sub(/ \(offset [0-9]+\)$/, ""); print; r = 0 }')
-    done < <(find "$A" "$X" -type f -print0)
+    done < <(find "$A" "$X" "$WORK/orca-aarch64" "$WORK/orca-x86_64" -type f -print0)
 
     # 4: merge. The prebuild pair first, because its two names differ.
     test -f "$A/$SQ/darwin-arm64.node" && test -f "$X/$SQ/darwin-x64.node" || fail "a per-target sidecar lacks its better-sqlite3 prebuild under $SQ"
@@ -202,17 +267,22 @@ universal() {
             *) fail "$f is named as a native but is not Mach-O universal ($want)" ;;
         esac
     done < <(find "$A" -type f \( -name '*.node' -o -name '*.dylib' -o -name rg -o -name node \))
-    node "$ROOT/scripts/verify-package-target-natives.mjs" --target macos --stage "$A" \
+    bash "$ROOT/scripts/run-no-skip.sh" -- node "$ROOT/scripts/verify-package-target-natives.mjs" --target macos --stage "$A" \
         || fail "the package-target-natives row refused the merged sidecar (its output is above)"
+    # Orca: lifted out before unify.py (its arch-named files exist in one tree each), merged by its own plan.
+    orca_universal "$WORK/orca-aarch64" "$WORK/orca-x86_64" "$WORK/orca-merged"
+    bash "$ROOT/scripts/run-no-skip.sh" -- node "$ROOT/scripts/verify-orca-packaged-tree.mjs" --target macos --built "$WORK/orca-aarch64" --also-built "$WORK/orca-x86_64" --stage "$WORK/orca-merged" \
+        || fail "the orca-packaged-tree row refused the merged Orca tree (its output is above)"
+    bash "$ROOT/scripts/run-no-skip.sh" -- node "$ROOT/scripts/verify-package-target-natives.mjs" --target macos --stage "$WORK/orca-merged" \
+        || fail "the package-target-natives row refused the merged Orca tree (its output is above)"
     if [ "$(uname -s)" = Darwin ]; then
         test "$("$A/node/bin/node" --version)" = "$NODE_VERSION" || fail "the merged node does not report $NODE_VERSION"
     fi
-    while IFS= read -r f; do
-        fail "the merged sidecar still carries a checkout path: $f"
-    done < <(grep -rlF "$ROOT/" "$A" 2>/dev/null || true)
+    checkout_grep "the merged sidecar" "$A" "$WORK/orca-merged"
 
     # 6: stage, refresh precomplete, sign ad hoc.
     mv "$A/theia" "$A/node" "$UNI/Contents/Resources/"
+    mv "$WORK/orca-merged" "$UNI/Contents/Resources/orca"
     rm -f "${UNI:?}/precomplete"
     ( cd "$UNI/Contents/Resources" && python3 "$ROOT/upstream/config/createprecomplete.py" )
     test ! -e "$UNI/precomplete" || fail "a stray precomplete landed at the bundle root: $UNI/precomplete"
@@ -273,7 +343,7 @@ sys.exit(make_dmg.main(shlex.split(buildconfig.substs.get("MOZ_PACKAGE_EXTRA_ARG
     # 8: replace the evidence, then let the row judge it.
     rm -rf "${ROOT:?}/.mozbuild/macos-package"
     mv "$EV" "$ROOT/.mozbuild/macos-package"
-    node "$ROOT/scripts/verify-macos-package-payload.mjs" || fail "the macos-package-payload row refused the new evidence (its output is above)"
+    bash "$ROOT/scripts/run-no-skip.sh" -- node "$ROOT/scripts/verify-macos-package-payload.mjs" || fail "the macos-package-payload row refused the new evidence (its output is above)"
     echo "package-macos: wrote .mozbuild/macos-package/ ($appname, $DMG_NAME, $MAR_NAME, BuildID $id_x); signed ad hoc, not notarized"
 }
 
@@ -284,6 +354,18 @@ fi
 
 test -f "$APP/lib/backend/main.js" || fail "$APP/lib/backend/main.js is absent; run yarn build in theia/ first"
 test -f "$ROOT/theia/node_modules/better-sqlite3/prebuilds/$PREBUILD" || fail "$ROOT/theia/node_modules/better-sqlite3/prebuilds/$PREBUILD is absent; run yarn install in theia/ first"
+# Orca for this architecture is the hosted macos-orca-$NODE_KEY job's artifact, built on that target's own runner
+# (node-pty included, P68-05). It is admitted against the SHA256SUMS digest that job recorded as its output.
+ORCA_ART="macos-orca-${NODE_KEY#darwin-}"
+test -n "${PB_MAC_ORCA_DIR:-}" || fail "PB_MAC_ORCA_DIR is unset; download the $ORCA_ART artifact of the hosted job and set PB_MAC_ORCA_DIR to it, with PB_MAC_ORCA_SUMS_SHA256 set to that job's sums_sha256 output"
+bash "$ROOT/powerbrowser/packaging/check-win-sidecar.sh" check "$PB_MAC_ORCA_DIR" "${PB_MAC_ORCA_SUMS_SHA256:-}" \
+    || fail "the $ORCA_ART artifact at $PB_MAC_ORCA_DIR was not admitted (its output is above)"
+# The admitted tar carries the tree with its modes; its own SHA256SUMS is re-checked once unpacked.
+test -f "$PB_MAC_ORCA_DIR/tree.tar" || fail "the $ORCA_ART artifact at $PB_MAC_ORCA_DIR holds no tree.tar; it predates 68-CR-03, so re-run the hosted job"
+ORCA_TREE="$(mktemp -d)"
+tar -xpf "$PB_MAC_ORCA_DIR/tree.tar" -C "$ORCA_TREE" || fail "the $ORCA_ART tree.tar could not be unpacked"
+bash "$ROOT/powerbrowser/packaging/check-win-sidecar.sh" check "$ORCA_TREE" "$(sha256sum "$ORCA_TREE/SHA256SUMS" | cut -d' ' -f1)" \
+    || fail "the unpacked $ORCA_ART tree does not agree with its own SHA256SUMS (its output is above)"
 fetch_pin "$NODE_KEY"
 
 # Release branding is the default, as in package-linux.sh: mozconfig.release falls back to the release branding
@@ -324,6 +406,8 @@ mkdir -p "$RES/theia/node_modules/better-sqlite3/lib" "$RES/theia/node_modules/b
 cp -a "$ROOT/theia/node_modules/better-sqlite3/lib/." "$RES/theia/node_modules/better-sqlite3/lib/"
 cp "$ROOT/theia/node_modules/better-sqlite3/package.json" "$RES/theia/node_modules/better-sqlite3/package.json"
 cp "$ROOT/theia/node_modules/better-sqlite3/prebuilds/$PREBUILD" "$RES/theia/node_modules/better-sqlite3/prebuilds/$PREBUILD"
+# 63-CR-01: the Claude Code process wrapper, where the orca-agents backend's require.resolve finds it.
+bash "$ROOT/powerbrowser/packaging/stage-orca-agents-wrapper.sh" "$ROOT" "$RES/theia"
 
 # Node for this architecture, from the pinned archive. The tar member names carry the version and
 # the os-arch; the staged binary must be a Mach-O of this architecture (checked below).
@@ -332,10 +416,23 @@ tar -xzf "$ARCHIVE" -C "$RES/node" --strip-components=1 "node-$NODE_VERSION-$NOD
 test -f "$RES/node/bin/node" || fail "the archive carries no node-$NODE_VERSION-$NODE_BIN_DIR/bin/node member"
 chmod 755 "$RES/node/bin/node"
 cp "$ROOT/powerbrowser/distribution/policies.json" "$RES/distribution/policies.json"
+bash "$ROOT/powerbrowser/packaging/stage-bundled-xpi.sh" "$RES/distribution"
 
-# No payload carries a Linux name. The darwin pin and the darwin prebuild are the only natives staged.
-if find "$RES" \( -name '*linux*' -o -name '*musl*' -o -name '*win32*' \) -print -quit | grep -q .; then
-    fail "a non-darwin native is staged under $RES: $(find "$RES" \( -name '*linux*' -o -name '*musl*' -o -name '*win32*' \) -print -quit)"
+# Orca: package.json, out/orcad and out/web of the admitted artifact, as <GreD>/orca. Its build root is purged.
+rm -rf "$RES/orca"
+mkdir -p "$RES/orca/out"
+cp -a "$ORCA_TREE/package.json" "$RES/orca/package.json"
+cp -a "$ORCA_TREE/out/orcad" "$ORCA_TREE/out/web" "$RES/orca/out/"
+# packaging-prefs-network-02: Orca's own MIT notice, verified against the licence allowlist.
+bash "$ROOT/powerbrowser/packaging/stage-orca-licence.sh" "$ROOT" "$RES/orca"
+bash "$ROOT/powerbrowser/packaging/check-win-sidecar.sh" purge "$ORCA_TREE" "$RES/orca" \
+    || fail "the staged Orca tree names the hosted build root"
+rm -rf "$ORCA_TREE"
+
+# No payload carries a Linux name. The darwin pin and the darwin prebuild are the only natives staged. Orca's
+# tree is excluded: Orca's own sources name other platforms in file names, so its natives are judged by magic below.
+if find "$RES" -path "$RES/orca" -prune -o \( -name '*linux*' -o -name '*musl*' -o -name '*win32*' \) -print -quit | grep -q .; then
+    fail "a non-darwin native is staged under $RES: $(find "$RES" -path "$RES/orca" -prune -o \( -name '*linux*' -o -name '*musl*' -o -name '*win32*' \) -print -quit)"
 fi
 
 # Every native payload must be a thin Mach-O of this architecture. The name does not decide it: a
@@ -361,6 +458,14 @@ check_payload "$RES/theia/node_modules/better-sqlite3/prebuilds/$PREBUILD"
 while IFS= read -r payload; do
     check_payload "$payload"
 done < <(find "$RES/theia" "$RES/node" -type f \( -name '*.node' -o -name '*.dylib' -o -name '*.so' -o -perm -100 \))
+# Orca by magic, not by name (P68-31): every Mach-O must be a thin $WANT_ARCH; an ELF or a PE is red.
+while IFS= read -r -d '' payload; do
+    case "$(magic_kind "$payload")" in
+        thin|fat) check_payload "$payload" ;;
+        elf) fail "$payload is an ELF binary under Contents/Resources/orca (a non-macOS build reached the bundle)" ;;
+        *) [ "$(od -An -N2 -tx1 "$payload" 2>/dev/null | tr -d ' \n')" != 4d5a ] || fail "$payload is a PE binary under Contents/Resources/orca (a Windows build reached the bundle)" ;;
+    esac
+done < <(find "$RES/orca" -type f -print0)
 
 # esbuild's node-file: module keys name the build checkout. The runtime reads them back by exact
 # string (the modules are not loaded from those paths), so the whole key is rewritten, as
@@ -374,9 +479,7 @@ perl -pi -e 's{//\s*node-file:\S+}{// node-file:<buildhost>}; s{"node-file:[^"]+
 # A checkout path must not ship: the staged sidecar and node, and any RUNPATH or bundle map key that
 # names the build checkout, fail the run naming the file. RUNPATH rewriting for Mach-O needs the exact
 # rpath string from the binary, so it is not guessed here; a hit fails rather than being rewritten.
-while IFS= read -r hit; do
-    fail "the staged bundle still carries a checkout path: $hit"
-done < <(grep -rlF "$ROOT/" "$RES/theia" "$RES/node" 2>/dev/null || true)
+checkout_grep "the staged bundle" "$RES/theia" "$RES/node" "$RES/orca"
 
 # The bundle's precomplete must describe the staged files, because full MARs are made from it.
 # createprecomplete.py takes the Mac layout (Contents/Resources/precomplete, walked from the bundle

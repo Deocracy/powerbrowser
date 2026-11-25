@@ -424,6 +424,11 @@ export async function serveNavPages(pages, opts = {}) {
             response.end('not found');
             return;
         }
+        // 66-09: a page that writes its own response (an attachment, held headers).
+        if (typeof page.raw === 'function') {
+            page.raw(request, response);
+            return;
+        }
         if (page.json) {
             const value = page.json(parsed.searchParams);
             if (value === undefined) {

@@ -427,6 +427,27 @@ export function setupRowMeta(modeLabel: string, windows: number, tabs: number): 
     return `${modeLabel} · ${windows} ${windowWord} · ${tabs} ${tabWord}`;
 }
 
+/**
+ * P65-18 (TAB-08): every tab URI a saved Setup or the session snapshot names, from each window's tab list and
+ * dock tree. orca-panes keeps a closed pb-orca: name reserved while this set still holds it.
+ */
+export function referencedTabUrisOf(store: { setups: SetupSnapshot[] } | undefined, session: SessionSnapshot | undefined): Set<string> {
+    const uris = new Set<string>();
+    const walk = (node: SetupDockNode | null | undefined): void => {
+        if (node?.type === 'tabs') {
+            node.tabs.forEach(tab => uris.add(tab));
+        } else if (node) {
+            node.children.forEach(walk);
+        }
+    };
+    for (const win of [...(store?.setups ?? []).flatMap(setup => setup.windows), ...(session?.windows ?? [])]) {
+        win.tabs.forEach(tab => uris.add(tab));
+        walk(win.dock?.main);
+        walk(win.dock?.bottom);
+    }
+    return uris;
+}
+
 @injectable()
 export class SetupsService implements FrontendApplicationContribution {
 
@@ -663,14 +684,14 @@ export class SetupsService implements FrontendApplicationContribution {
     protected async applySnapshot(row: { modeId: string; windows: SetupWindowSnapshot[] }, notify: boolean, openWebTabs = true): Promise<void> {
         this.applyGeometry(row.windows[0]);
         const dropped = await this.placeTabs(row, openWebTabs);
-        const modeId = row.windows[0].modeId ?? row.modeId;
+        const storedModeId = row.windows[0].modeId ?? row.modeId;
         // NG-029: the mode goes through ModeService.activateMode, the path the
         // mode toggle takes (GUI-DEFECTS item 6), so the panel map, the Explorer
         // dock, the Organising slot, the furniture and the mode attribute all
         // apply. A bare switchPerspective applied the perspective and none of
         // those. activateMode resolves an unknown id to Browsing by itself;
         // `known` only chooses the contracted fallback notice below.
-        const shippedKnown = SHIPPED_MODES.some(descriptor => descriptor.id === modeId);
+        const shippedKnown = SHIPPED_MODES.some(descriptor => descriptor.id === storedModeId);
         if (!notify && !shippedKnown) {
             // NG-032 round 1: the launch restore waits (bounded) for the
             // custom-mode load before resolving the session's mode, so a
@@ -679,6 +700,9 @@ export class SetupsService implements FrontendApplicationContribution {
             // path (notify=true) keeps its synchronous check.
             await this.waitForCustomModes();
         }
+        // theia-pane-hosting-04: a custom mode renamed after this snapshot was saved is found under its new id
+        // (resolved after the custom-mode load, which is what fills the rename map).
+        const modeId = shippedKnown ? storedModeId : this.modes.resolveModeId(storedModeId);
         const knownCustom = this.modes.getCustomModes().some(custom => custom.id === modeId);
         const known = shippedKnown || knownCustom;
         try {
@@ -813,9 +837,17 @@ export class SetupsService implements FrontendApplicationContribution {
         }));
     }
 
+    /**
+     * PAN-04: a tab of a group in its undo window is shown nowhere and closes with the group, so no snapshot
+     * records it. The quit flush takes the session snapshot before the pending close has closed the widgets.
+     */
+    protected isPendingClose(widget: Widget): boolean {
+        return this.groupModel.isClosingKey(this.groupModel.keyOf(widget));
+    }
+
     /** Snapshot the core window plus tracked dependents, rects verbatim. */
     protected snapshotWindows(): SetupWindowSnapshot[] {
-        const coreTabs = this.tabsOfShell();
+        const coreTabs = this.tabsOfShell().filter(entry => !this.isPendingClose(entry.widget));
         const active = this.shell.activeWidget?.id;
         const core: SetupWindowSnapshot = {
             x: window.screenX,
@@ -823,7 +855,7 @@ export class SetupsService implements FrontendApplicationContribution {
             width: window.outerWidth,
             height: window.outerHeight,
             tabs: coreTabs.map(entry => entry.uri),
-            activeTab: coreTabs.some(entry => entry.id === active) ? (coreTabs.find(entry => entry.id === active)?.uri ?? null) : null,
+            activeTab: coreTabs.find(entry => entry.id === active)?.uri ?? null,
             modeId: this.currentModeId(),
             dock: {
                 main: this.dockNodeOf(this.shell.mainPanel.saveLayout().main),
@@ -861,7 +893,7 @@ export class SetupsService implements FrontendApplicationContribution {
         if (area.type === 'tab-area') {
             const tabs: string[] = [];
             for (const widget of area.widgets) {
-                const uri = this.tabUriOf(widget);
+                const uri = this.isPendingClose(widget) ? undefined : this.tabUriOf(widget);
                 if (uri !== undefined && !tabs.includes(uri)) {
                     tabs.push(uri);
                 }
@@ -923,6 +955,12 @@ export class SetupsService implements FrontendApplicationContribution {
             // resource-URI fallback below instead of losing the tab.
         }
         try {
+            // A diff editor's resource URI is its modified file, which reopens as a plain editor; its own diff: URI
+            // reopens the diff (65-05).
+            const editorUri = (widget as unknown as { editor?: { uri?: { scheme?: string; toString(): string } } }).editor?.uri;
+            if (editorUri?.scheme === 'diff') {
+                return editorUri.toString();
+            }
             const navigable = widget as unknown as { getResourceUri?: () => { toString(): string } };
             const resource = navigable.getResourceUri?.();
             if (resource) {
@@ -947,7 +985,8 @@ export class SetupsService implements FrontendApplicationContribution {
         if (shipped) {
             return shipped.label;
         }
-        const custom = this.modes.getCustomModes().find(row => row.id === modeId);
+        const resolved = this.modes.resolveModeId(modeId); // theia-pane-hosting-04: a renamed custom mode's old id
+        const custom = this.modes.getCustomModes().find(row => row.id === resolved);
         // The stored id is never shown (14-UI-SPEC.md Copywriting Contract):
         // an unknown id falls back to the shipped Browsing label, mirroring
         // the restore path's Browsing fallback.
@@ -1288,10 +1327,14 @@ export class SetupsService implements FrontendApplicationContribution {
         } catch {
             return;
         }
-        window.setTimeout(() => {
+        // A newer notice restarts the timer, so an older one cannot remove it early.
+        window.clearTimeout(this.flashTimer);
+        this.flashTimer = window.setTimeout(() => {
             void this.statusBar.removeElement(id).catch(() => undefined);
         }, 4000);
     }
+
+    protected flashTimer = 0;
 
     protected async loadSetups(): Promise<void> {
         let raw: string;
@@ -1388,15 +1431,49 @@ export class SetupsService implements FrontendApplicationContribution {
         }
     }
 
+    /**
+     * P65-18: the tab URIs setups.json and the session snapshot name. Audit fix (theia-pane-hosting-03): an absent
+     * setups.json names nothing, but one that cannot be read or does not parse (a mid-save race, a partial write)
+     * makes the set unknown, and so does an unreadable session: undefined, with one log line, and the caller keeps
+     * every reservation rather than releasing a name a saved Setup may still hold.
+     */
+    async referencedTabUris(): Promise<Set<string> | undefined> {
+        let setups: SetupSnapshot[] = [];
+        try {
+            if (await this.fileService.exists(this.setupsUri)) {
+                const parsed = parseSetupStore((await this.fileService.read(this.setupsUri)).value);
+                if (!parsed.ok) {
+                    console.info('[@powerbrowser/modes] the saved setups did not parse; the referenced tab list is not known');
+                    return undefined;
+                }
+                setups = parsed.setups;
+            }
+        } catch {
+            console.info('[@powerbrowser/modes] no saved setups read; the referenced tab list is not known');
+            return undefined;
+        }
+        let session: SessionSnapshot | undefined;
+        try {
+            session = parseSessionSnapshot(await this.profileStorage.getData<unknown>(SESSION_STORAGE_KEY));
+        } catch {
+            console.info('[@powerbrowser/modes] no saved session read; the referenced tab list is not known');
+            return undefined;
+        }
+        return referencedTabUrisOf({ setups }, session);
+    }
+
     protected async persistLastSession(name: string | null): Promise<void> {
         let setups = this.lastGoodSetups;
         try {
             const raw = (await this.fileService.read(this.setupsUri)).value;
             const parsed = parseSetupStore(raw);
-            if (parsed.ok) {
-                setups = parsed.setups;
-                this.lastGoodSetups = parsed.setups;
+            if (!parsed.ok) {
+                // An unreadable store is shown empty but never overwritten unasked:
+                // this runs on every quit, and writing here would erase every setup.
+                return;
             }
+            setups = parsed.setups;
+            this.lastGoodSetups = parsed.setups;
         } catch {
             if (name === null) {
                 return;

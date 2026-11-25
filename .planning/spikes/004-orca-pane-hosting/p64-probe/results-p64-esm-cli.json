@@ -1,0 +1,145 @@
+{
+  "bundle": "esm",
+  "startedAt": "2026-11-10T17:58:26.887Z",
+  "theiaBuild": "/home/chris/orca/workspaces/Power-Browser/p61-01/theia/applications/browser/lib/backend/main.js",
+  "repoStatus": "UU README.md",
+  "load": {
+    "loadMs": 657,
+    "reactCopies": 1,
+    "reactVersion": "19.2.8",
+    "theiaReact": "19.2.8",
+    "esmFilesFetchedAtBoot": 132
+  },
+  "initial": {
+    "activeWorktreeId": null,
+    "visibility": "visible",
+    "tabs": 0
+  },
+  "cli": [
+    {
+      "label": "T1 no active worktree",
+      "becameTab": true,
+      "ms": 368,
+      "activeWorktreeId": "null",
+      "visibility": "visible",
+      "hostTerminalHandles": 1,
+      "tabsNow": 1,
+      "executionHostIds": [
+        "runtime:web-f721e4ae-368b-4ec5-a47a-34924dbdb596"
+      ]
+    },
+    {
+      "label": "T3a after a client-issued terminal.create (host RPC path)",
+      "becameTab": true,
+      "ms": 326,
+      "activeWorktreeId": "null",
+      "visibility": "visible",
+      "hostTerminalHandles": 3,
+      "tabsNow": 3,
+      "executionHostIds": [
+        "runtime:web-f721e4ae-368b-4ec5-a47a-34924dbdb596"
+      ]
+    },
+    {
+      "label": "T3b after a store-created terminal (createNewTerminalTab), 20 s window",
+      "becameTab": false,
+      "ms": null,
+      "activeWorktreeId": "set",
+      "visibility": "visible",
+      "hostTerminalHandles": 5,
+      "tabsNow": 4,
+      "executionHostIds": [
+        "runtime:web-f721e4ae-368b-4ec5-a47a-34924dbdb596"
+      ]
+    },
+    {
+      "label": "T6 after reselecting the worktree",
+      "becameTab": false,
+      "ms": null,
+      "activeWorktreeId": "set",
+      "visibility": "visible",
+      "hostTerminalHandles": 6,
+      "tabsNow": 4,
+      "executionHostIds": [
+        "runtime:web-f721e4ae-368b-4ec5-a47a-34924dbdb596"
+      ]
+    }
+  ],
+  "persistence": true,
+  "hostAfterClientRpcCreate": {
+    "publicationEpoch": "headless:pty-backed:mwazuj5b:client-navigation",
+    "snapshotVersion": 2,
+    "count": 2,
+    "kinds": [
+      "terminal",
+      "terminal"
+    ],
+    "keys": [
+      "worktree",
+      "publicationEpoch",
+      "snapshotVersion",
+      "activeGroupId",
+      "activeTabId",
+      "activeTabType",
+      "tabGroups",
+      "tabs",
+      "agentSenderAssociations",
+      "clientHostedPagesUnreconciled"
+    ]
+  },
+  "hostAfterStoreCreate": {
+    "publicationEpoch": "headless:pty-backed:mwazuj5b:client-navigation",
+    "snapshotVersion": 5,
+    "count": 4,
+    "kinds": [
+      "terminal",
+      "terminal",
+      "terminal",
+      "terminal"
+    ],
+    "keys": [
+      "worktree",
+      "publicationEpoch",
+      "snapshotVersion",
+      "activeGroupId",
+      "activeTabId",
+      "activeTabType",
+      "tabGroups",
+      "tabs",
+      "agentSenderAssociations",
+      "clientHostedPagesUnreconciled"
+    ]
+  },
+  "hostAfterT3b": {
+    "publicationEpoch": "headless:pty-backed:mwazuj5b:client-navigation",
+    "snapshotVersion": 6,
+    "count": 5,
+    "kinds": [
+      "terminal",
+      "terminal",
+      "terminal",
+      "terminal",
+      "terminal"
+    ],
+    "keys": [
+      "worktree",
+      "publicationEpoch",
+      "snapshotVersion",
+      "activeGroupId",
+      "activeTabId",
+      "activeTabType",
+      "tabGroups",
+      "tabs",
+      "agentSenderAssociations",
+      "clientHostedPagesUnreconciled"
+    ]
+  },
+  "reselect": {
+    "terminalsBefore": 4,
+    "terminalsAfter": 4,
+    "ms": null
+  },
+  "orcadSurvivors": 0,
+  "finishedAt": "2026-11-10T17:59:21.728Z",
+  "verdict": "DONE"
+}

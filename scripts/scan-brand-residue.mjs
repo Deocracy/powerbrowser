@@ -28,6 +28,15 @@
 // hit and fails condition 4 even though conditions 1-3 all agree with
 // themselves.
 //
+// `scope.tracked_residue_probes` (P60-R2) is a second probe list that applies to
+// the tracked tree ONLY. `orca` lives there rather than in `residue_probes`
+// because the `--extra-root` pass walks Gecko, which holds 1598 files containing
+// the substring (the GNOME Orca screen reader, and in-word joins such as
+// ErrorCallback), and coincidental rows are excluded from that pass's claim set,
+// so probing it there would turn the permanent rebase gate red with nothing to
+// classify. Orca is a classification of THIS tree: every tracked mention is
+// claimed by a coincidental row with an exact count, so a stray one goes red.
+//
 // -- `--reconcile` has two states, and says which one it is in --
 // Pre-rename (any renameable occurrence still present): asserts 1-4 and exits
 // non-zero. That run is the committed red evidence.
@@ -166,8 +175,13 @@ export function loadInventory(path = INVENTORY_PATH) {
  * spans into `taken[]`, so such a row would swallow the shorter brand token
  * nested inside it AND suppress that span's independent probe hit.
  */
+/** Both probe lists: the tracked-tree scan's default. `--extra-root` uses `residue_probes` only. */
+export function allProbes(inv) {
+  return [...(inv.scope?.residue_probes ?? []), ...(inv.scope?.tracked_residue_probes ?? [])];
+}
+
 export function assertNoProbeSwallowingRow(inv, path = INVENTORY_PATH) {
-  const probeForms = (inv.scope?.residue_probes ?? []).map((p) => p.toLowerCase());
+  const probeForms = allProbes(inv).map((p) => p.toLowerCase());
   for (const row of inv.tokens) {
     // Renameable rows are what the gate exists to catch; `coincidental` rows are
     // already excluded from the --extra-root row set, which is what makes the
@@ -415,7 +429,7 @@ export function chainOf(inv, name) {
 // Scan
 // ---------------------------------------------------------------------------
 
-export function scan(inv, { chain = null, root = REPO_ROOT, files = null, rows = null } = {}) {
+export function scan(inv, { chain = null, root = REPO_ROOT, files = null, rows = null, probes = null } = {}) {
   const activeRows = rows ?? inv.tokens;
   const activeFiles = files ?? scopeFiles(inv, { chainFiles: chain ? chainOf(inv, chain).files : null });
 
@@ -429,7 +443,7 @@ export function scan(inv, { chain = null, root = REPO_ROOT, files = null, rows =
   const occurrences = [];
   const unclaimedProbes = [];
   const unreadable = [];
-  const probes = inv.scope?.residue_probes ?? [];
+  const activeProbes = probes ?? allProbes(inv);
   // A second, deliberately dumb recount: plain case-sensitive substring, no
   // rows, no boundary rule, no claim order. It is the only number in this file
   // computed the same way 01-RESEARCH.md computed its ground truth, which is
@@ -468,7 +482,7 @@ export function scan(inv, { chain = null, root = REPO_ROOT, files = null, rows =
     // boundary rule, deliberately NOT the matcher above.
     const lower = text.toLowerCase();
     const starts = lineIndex(text);
-    for (const probe of probes) {
+    for (const probe of activeProbes) {
       const needle = probe.toLowerCase();
       let i = lower.indexOf(needle);
       while (i !== -1) {
@@ -561,6 +575,24 @@ export function partitionHandWrite(inv, offenses, { root = REPO_ROOT } = {}) {
     (excepted ? handWritten : enforced).push(o);
   }
   return { handWritten, enforced };
+}
+
+/**
+ * The `--extra-root` pass's scan: coincidental rows excluded (CR-01, see main())
+ * and `residue_probes` only. `tracked_residue_probes` (P60-R2, `orca`) stays off
+ * here because Gecko holds 1598 files containing that substring -- the GNOME
+ * Orca screen reader and in-word joins such as ErrorCallback -- and with the
+ * coincidental rows excluded nothing could claim them, so the permanent rebase
+ * gate would be red with nothing to classify. Orca is a PowerBrowser-tree
+ * classification. One function so the self-test exercises the call main() makes.
+ */
+export function scanExtraRoot(inv, root, files) {
+  return scan(inv, {
+    root,
+    files,
+    rows: inv.tokens.filter((r) => r.class !== 'coincidental'),
+    probes: inv.scope?.residue_probes ?? [],
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -979,6 +1011,63 @@ function selfTest() {
       overall = 1;
     }
 
+    // Fixtures 6b-6d (P60-R2): `scope.tracked_residue_probes`. Fixture
+    // inventories only; the plant files are fixtures in tmp.
+    const orcaInv = (count) => ({
+      $comment: 'scan-brand-residue.mjs --self-test tracked-probe fixture inventory. Never the real one.',
+      scope: { exclude: [], binary_extensions: ['.png'], residue_probes: ['sourcerer'], tracked_residue_probes: ['orca'] },
+      tokens: [{
+        token: 'Orca', case_form: 'title', class: 'coincidental', target: 'Orca',
+        expected_count: count, expected_files: ['a.txt'], only_in: ['a.txt'],
+      }],
+    });
+    const orcaDir = join(tmp, 'tracked-probe');
+    mkdirSync(orcaDir);
+    writeFileSync(join(orcaDir, 'a.txt'), 'Orca\n');
+    const orcaGate = (inv, files) => {
+      const r = scan(inv, { root: orcaDir, files });
+      const rec = reconcile(inv, r, {});
+      return { gate: gateFailures(offensesOf(r), rec), failures: rec.failures };
+    };
+    // 6b: green control, then an unclaimed Orca in another file.
+    const oCtl = orcaGate(orcaInv(1), ['a.txt']);
+    writeFileSync(join(orcaDir, 'b.txt'), 'Orca planted\n');
+    const oPlant = orcaGate(orcaInv(1), ['a.txt', 'b.txt']);
+    if (oCtl.gate.length !== 0) {
+      console.error(`scan-brand-residue: --self-test FAIL -- the tracked-probe control (one claimed Orca in a.txt) is not green: [${oCtl.failures}]`);
+      overall = 1;
+    } else if (oPlant.failures.some((f) => f.includes('condition 4') && f.includes('b.txt:1') && f.includes('probe "orca"'))) {
+      console.log('scan-brand-residue: --self-test PASS -- tracked_residue_probes: a claimed Orca is green, and an unclaimed Orca in b.txt fails condition 4 naming b.txt:1 and probe "orca"');
+    } else {
+      console.error(`scan-brand-residue: --self-test FAIL -- an unclaimed Orca under tracked_residue_probes did not fail condition 4 naming b.txt:1: [${oPlant.failures}]`);
+      overall = 1;
+    }
+    // 6c: the same coincidental row with a wrong exact count.
+    const oCount = orcaGate(orcaInv(2), ['a.txt']);
+    if (oCount.gate.length !== 0 && oCount.failures.some((f) => f.includes('held-back row "Orca"') && f.includes('expected 2'))) {
+      console.log('scan-brand-residue: --self-test PASS -- an Orca coincidental row with expected_count 2 over one occurrence is red, naming the row');
+    } else {
+      console.error(`scan-brand-residue: --self-test FAIL -- a wrong Orca expected_count stayed green or did not name the row: [${oCount.failures}]`);
+      overall = 1;
+    }
+    // 6d: the --extra-root scan (the call main() makes) ignores the tracked
+    // probe, while residue_probes still run there.
+    const extraOrcaDir = join(tmp, 'tracked-probe-extra');
+    mkdirSync(extraOrcaDir);
+    writeFileSync(join(extraOrcaDir, 'gecko.txt'), 'Orca screen reader\nErrorCallback\n');
+    const eCtl = scanExtraRoot(orcaInv(1), extraOrcaDir, ['gecko.txt']);
+    const tCtl = scan(orcaInv(1), { root: extraOrcaDir, files: ['gecko.txt'] });
+    writeFileSync(join(extraOrcaDir, 'gecko.txt'), 'Orca screen reader\nErrorCallback\nSourcerers\n');
+    const ePlant = scanExtraRoot(orcaInv(1), extraOrcaDir, ['gecko.txt']);
+    const orcaLeak = eCtl.unclaimedProbes.filter((u) => u.probe === 'orca').length;
+    const trackedSees = tCtl.unclaimedProbes.filter((u) => u.probe === 'orca').length;
+    if (orcaLeak === 0 && trackedSees === 2 && ePlant.unclaimedProbes.some((u) => u.probe === 'sourcerer' && u.line === 3)) {
+      console.log('scan-brand-residue: --self-test PASS -- the --extra-root scan raised no orca probe over "Orca screen reader" and ErrorCallback (the tracked scan raises 2 there), while a planted sourcerer form in the same fixture is still red');
+    } else {
+      console.error(`scan-brand-residue: --self-test FAIL -- --extra-root orca probe hits ${orcaLeak} (want 0), tracked-scan orca hits ${trackedSees} (want 2), planted sourcerer hit ${ePlant.unclaimedProbes.some((u) => u.probe === 'sourcerer')} (want true)`);
+      overall = 1;
+    }
+
     // Fixtures 7-9 (01-15): the `--extra-root` mode, which is how this gate
     // reaches a tree `git ls-files` cannot name.
     //
@@ -1335,11 +1424,10 @@ function main(argv) {
       // derived from the inventory by `assertNoProbeSwallowingRow`, which
       // `loadInventory` runs, so adding such a row fails at load rather than
       // silently reopening this defect.
-      const extra = scan(inv, {
-        root: extraRoot,
-        files: extraFiles,
-        rows: inv.tokens.filter((r) => r.class !== 'coincidental'),
-      });
+      //
+      // P60-R2: and it probes with `residue_probes` only, never
+      // `tracked_residue_probes` -- see scanExtraRoot().
+      const extra = scanExtraRoot(inv, extraRoot, extraFiles);
       const extraOffenses = offensesOf(extra);
       for (const o of extraOffenses) {
         console.error(`  ${join(extraRoot, o.file)}:${o.line}: ${o.row.token}`);

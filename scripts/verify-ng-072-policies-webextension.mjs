@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { extractPackage, REPO_ROOT } from './lib/built-tree.mjs';
 import { resolveConfig } from './generate.mjs';
+import { liveEnv } from './lib/firefox-bidi.mjs';
 
 const NAME = 'ng072-policies-packaged-webextension';
 const ID = 'ng072-probe@powerbrowser.test';
@@ -47,7 +48,7 @@ try {
     mkdirSync(profile);
     writeFileSync(join(profile, 'user.js'), userPref('xpinstall.signatures.required', false));
     const browser = spawn(join(prefix, config.identity.binary_name), ['--headless', '--no-remote', '--profile', profile, 'about:blank'],
-        { env: { ...process.env, XDG_CONFIG_HOME: join(dir, 'xdg') }, stdio: 'ignore', detached: true });
+        { env: liveEnv({ ...process.env, XDG_CONFIG_HOME: join(dir, 'xdg') }), stdio: 'ignore', detached: true });
     const deadline = Date.now() + 90000;
     while (!hit && Date.now() < deadline) await new Promise(r => setTimeout(r, 500));
     try { process.kill(-browser.pid, 'SIGTERM'); } catch { /* gone */ }

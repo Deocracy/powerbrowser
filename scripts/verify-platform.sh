@@ -42,6 +42,17 @@
 #   --build        Build the Theia app before running (ported from
 #                  verify-phase-02.sh, which owned that lifecycle).
 #
+# Verdicts (SKIP-PROTOCOL.md, v1.7 audit-fix folder under .planning/workstreams/). A row is PASS, FAIL or SKIP. A script
+# row SKIPs when it exits 77 after printing "<name>: SKIP -- <reason>", or (until every script is converted)
+# when it exits 0 and its last stdout line is such a SKIP line. A SKIP asserted nothing: --quick and the
+# full run list it and still exit 0; --gate fails on every SKIP that no open ledger exclusion excuses.
+#
+# Fixture mode (scripts/verify-platform-driver.mjs --self-test only). PB_VERIFY_FIXTURE_REGISTRY names a
+# file under the temp directory whose lines "quick|label|command" or "full|label|command" replace the
+# registry; PB_VERIFY_FIXTURE_EXCLUSIONS, PB_VERIFY_FIXTURE_WINDOWS and PB_VERIFY_FIXTURE_LOCK then replace
+# the gate exclusions, the ledger and the live lock. Every verdict line says FIXTURE, so a stray export can
+# never pass for a verification of this tree.
+#
 # Every external script invocation runs under `setsid`. This script is
 # non-interactive, so job control is off and a plain `cmd &` would share this
 # script's own process group with every descendant a check backgrounds --
@@ -92,7 +103,47 @@ if [ "$GATE" -eq 1 ] && { [ "$QUICK" -eq 1 ] || [ -n "$ONLY" ]; }; then
   exit 1
 fi
 
+# Fixture mode: see the header. Honoured only when this file is the self-test's staged copy
+# (<temp>/verify-platform-driver-*/tree-*/scripts/verify-platform.sh) and the registry is under the temp
+# directory. The tracked driver refuses the variable outright: a stray export must never turn --quick into a
+# fixture run whose exit 0 the hooks and CI would read as the real table passing (review point 6).
+FIXTURE_REGISTRY="${PB_VERIFY_FIXTURE_REGISTRY:-}"
+FIXTURE_WORD=""
+WINDOWS_MD="$REPO_ROOT/.planning/WINDOWS.md"
+if [ -n "$FIXTURE_REGISTRY" ]; then
+  case "$REPO_ROOT" in
+    "${TMPDIR:-/tmp}"/verify-platform-driver-*/tree-*) ;;
+    *)
+      echo "verify-platform: FAIL -- PB_VERIFY_FIXTURE_REGISTRY is set ($FIXTURE_REGISTRY), but this driver ($REPO_ROOT/scripts/verify-platform.sh) is not the driver self-test's staged copy; unset it to run the real registry" >&2
+      exit 1
+      ;;
+  esac
+  case "$FIXTURE_REGISTRY" in
+    "${TMPDIR:-/tmp}"/*) ;;
+    *)
+      echo "verify-platform: FAIL -- PB_VERIFY_FIXTURE_REGISTRY must name a file under ${TMPDIR:-/tmp} (got '$FIXTURE_REGISTRY'); it is the driver self-test's fixture, never a real registry" >&2
+      exit 1
+      ;;
+  esac
+  if [ ! -f "$FIXTURE_REGISTRY" ]; then
+    echo "verify-platform: FAIL -- PB_VERIFY_FIXTURE_REGISTRY names no file ($FIXTURE_REGISTRY)" >&2
+    exit 1
+  fi
+  FIXTURE_WORD="FIXTURE "
+  [ -n "${PB_VERIFY_FIXTURE_WINDOWS:-}" ] && WINDOWS_MD="$PB_VERIFY_FIXTURE_WINDOWS"
+  echo "verify-platform: FIXTURE REGISTRY $FIXTURE_REGISTRY -- this run tests the driver, not the tree"
+fi
+
+# The exit status a row uses to say "did not run" (SKIP-PROTOCOL.md). 77 is the automake convention.
+SKIP_EXIT=77
+# "<name>: SKIP" or "<name>: SKIP -- <reason>", the one SKIP line a skipping row prints.
+SKIP_LINE_RE='^[[:space:]]*[A-Za-z0-9][A-Za-z0-9 ._/-]*: SKIP( -- (.*))?$'
+
 CURRENT_CHECK_PID=""
+CURRENT_ROW_TOKEN=""
+CURRENT_ROW_SINCE=""
+LIVE_LOCK_STATE=0
+LIVE_LOCK_HOLDER_PID=""
 BACKEND_SPAWN_PID=""
 BROWSER_SPAWN_PID=""
 SERVER_PID=""
@@ -118,6 +169,17 @@ track_temp() { TEMP_PATHS+=("$1"); }
 REAL_XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-}"
 HARNESS_CONFIG_HOME="$(mktemp -d)"; track_temp "$HARNESS_CONFIG_HOME"
 export XDG_CONFIG_HOME="$HARNESS_CONFIG_HOME"
+# Owner ruling 2026-11-15 (Scratch HOME), 68-11-REVIEW WR-01: every PowerBrowser launch in this file passes
+# HOME=$HARNESS_HOME (not exported: gh, git and node keep the real HOME), and XAUTHORITY explicitly, so a headed launch
+# still reaches the X server. live-scratch-home goes red on a launch line here without HOME=.
+HARNESS_HOME="$(mktemp -d)"; track_temp "$HARNESS_HOME"
+HARNESS_XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}"
+# Each script row's stdout and stderr are teed here (SKIP-PROTOCOL.md: the verdict reads the row's last
+# stdout line). The fifo has no writer, so a read with a timeout on it is a sleep that forks nothing.
+ROW_LOG_DIR="$(mktemp -d)"; track_temp "$ROW_LOG_DIR"
+mkfifo "$ROW_LOG_DIR/idle"
+exec {IDLE_FD}<>"$ROW_LOG_DIR/idle"
+idle() { read -r -t "$1" -u "$IDLE_FD" _ 2>/dev/null || true; }
 # gh resolves its config (and so its auth) from XDG_CONFIG_HOME/gh, which the export above
 # points at an empty dir: every full-tier gh api row (repo-controls, descriptor-monotonic) would
 # fail as unauthenticated. Point gh at the caller's real config dir instead, only when it exists
@@ -133,9 +195,16 @@ fi
 # SERVER_PID branch is the one thing it did not carry.
 cleanup() {
   if [ -n "$CURRENT_CHECK_PID" ]; then
+    local interrupted_pid="$CURRENT_CHECK_PID"
     kill -- "-$CURRENT_CHECK_PID" 2>/dev/null || kill "$CURRENT_CHECK_PID" 2>/dev/null || true
     wait "$CURRENT_CHECK_PID" 2>/dev/null || true
     CURRENT_CHECK_PID=""
+    # The group kill cannot reach what the row started in a session of its own (a detached orcad, audit
+    # harness-driver-04); everything still carrying the row's token is stopped too.
+    if [ -n "$CURRENT_ROW_TOKEN" ]; then
+      node "$REPO_ROOT/scripts/verify-orcad-leak.mjs" --session "$interrupted_pid" --token "$CURRENT_ROW_TOKEN" --since "${CURRENT_ROW_SINCE:-0}" --label "the interrupted row" --sweep || true
+      CURRENT_ROW_TOKEN=""
+    fi
   fi
   # Safety net for a check that started the sidecar via start_backend() and was
   # interrupted before its own stop_backend() -- setsid gives the sidecar its
@@ -159,6 +228,12 @@ cleanup() {
     kill -- "-$SERVER_PID" 2>/dev/null || kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
     SERVER_PID=""
+  fi
+  # The live lock's holder (acquire_live_lock): its group is flock and its sleep, so the lock is released here.
+  if [ -n "$LIVE_LOCK_HOLDER_PID" ]; then
+    kill -- "-$LIVE_LOCK_HOLDER_PID" 2>/dev/null || kill "$LIVE_LOCK_HOLDER_PID" 2>/dev/null || true
+    wait "$LIVE_LOCK_HOLDER_PID" 2>/dev/null || true
+    LIVE_LOCK_HOLDER_PID=""
   fi
   # -rf (not -f): TEMP_PATHS also carries throwaway profile/config directories.
   for p in "${TEMP_PATHS[@]:-}"; do
@@ -403,7 +478,7 @@ start_shell() {
     cp "$VERIFY05_USER_JS_PROFILE" "$profile/user.js"
   fi
 
-  setsid "${env_args[@]}" "$bin" --headless --profile "$profile" >"$log" 2>&1 &
+  setsid "${env_args[@]}" "HOME=$HARNESS_HOME" "$bin" --headless --profile "$profile" >"$log" 2>&1 &
   BROWSER_SPAWN_PID=$!
   return 0
 }
@@ -569,7 +644,7 @@ start_shell_display() {
     cp "$VERIFY05_USER_JS_PROFILE" "$profile/user.js"
   fi
 
-  setsid env "DISPLAY=$display_to_use" "XDG_CONFIG_HOME=${VERIFY05_XDG_CONFIG_HOME:-$HARNESS_CONFIG_HOME}" "$bin" --profile "$profile" >"$log" 2>&1 &
+  setsid env "DISPLAY=$display_to_use" "XDG_CONFIG_HOME=${VERIFY05_XDG_CONFIG_HOME:-$HARNESS_CONFIG_HOME}" "HOME=$HARNESS_HOME" "XAUTHORITY=$HARNESS_XAUTHORITY" "$bin" --profile "$profile" >"$log" 2>&1 &
   BROWSER_SPAWN_PID=$!
   DISPLAY_IN_USE="$display_to_use"
   return 0
@@ -1556,13 +1631,14 @@ check_shell_diagnostics_rows_populated() {
 # classified failure path (shell03-unrecoverable-immediate-error drives it) and
 # exercising it here would prove nothing about escapes. A regular FILE is
 # planted at exactly the path `TheiaService._resolveConfigDir()` derives from
-# the config-home environment variable, so `PowerBrowserAPI.ensureDirectory`
-# (IOUtils.makeDirectory) cannot create a directory there and throws.
+# the launch's profile directory (<profile>/powerbrowser-theia), so
+# `PowerBrowserAPI.ensureDirectory` (IOUtils.makeDirectory) cannot create a
+# directory there and throws.
 #
 # Both planted directories are mktemp -d paths registered with track_temp
 # (T-01-10) -- never a repo file, never a path outside the temp root.
 check_start_failure_shows_error() {
-  local stub_dir poison_home user_js result=0
+  local stub_dir profile user_js result=0
   stub_dir="$(mktemp -d)"; track_temp "$stub_dir"
   # Exists only so the sidecar-resolution step's existence check passes. On the
   # path under test it is never spawned at all -- the settings-folder fault
@@ -1572,9 +1648,11 @@ check_start_failure_shows_error() {
 setInterval(() => {}, 60000);
 EOF
 
-  poison_home="$(mktemp -d)"; track_temp "$poison_home"
-  # THE FAULT: a regular file where the settings folder must be created.
-  printf 'not a directory\n' > "$poison_home/powerbrowser"
+  profile="$(mktemp -d)"; track_temp "$profile"
+  # THE FAULT: a regular file where the settings folder must be created. WINDOWS 36: with a
+  # profile present TheiaService._resolveConfigDir() returns <profile>/powerbrowser-theia and
+  # never reads XDG_CONFIG_HOME, so the plant goes in the launch's own profile, minted here.
+  printf 'not a directory\n' > "$profile/powerbrowser-theia"
 
   user_js="$(mktemp)"; track_temp "$user_js"
   # A recovery-probe interval far beyond this check's own deadline: the error
@@ -1588,11 +1666,9 @@ user_pref("powerbrowser.sidecar.recoveryProbeIntervalMs", 600000);
 EOF
 
   export VERIFY05_USER_JS_PROFILE="$user_js"
-  export VERIFY05_XDG_CONFIG_HOME="$poison_home"
-  start_shell
+  start_shell "$profile"
   local start_rc=$?
   unset VERIFY05_USER_JS_PROFILE
-  unset VERIFY05_XDG_CONFIG_HOME
   if [ "$start_rc" -ne 0 ]; then
     echo "start-failure-shows-error: FAIL -- MIG-04 -- could not launch the built binary" >&2
     return 1
@@ -1959,9 +2035,9 @@ check_side05_second_launch_focuses() {
     second_log="$(mktemp)"; track_temp "$second_log"
 
     if [ "$round" = "bare" ]; then
-      timeout 30 env "DISPLAY=$display_to_use" "$bin" --profile "$profile" >"$second_log" 2>&1
+      timeout 30 env "DISPLAY=$display_to_use" "HOME=$HARNESS_HOME" "XAUTHORITY=$HARNESS_XAUTHORITY" "$bin" --profile "$profile" >"$second_log" 2>&1
     else
-      timeout 30 env "DISPLAY=$display_to_use" "$bin" --profile "$profile" "$arg_path" >"$second_log" 2>&1
+      timeout 30 env "DISPLAY=$display_to_use" "HOME=$HARNESS_HOME" "XAUTHORITY=$HARNESS_XAUTHORITY" "$bin" --profile "$profile" "$arg_path" >"$second_log" 2>&1
     fi
     second_rc=$?
 
@@ -2047,7 +2123,7 @@ check_side05_no_second_backend() {
 
   local second_log second_rc
   second_log="$(mktemp)"; track_temp "$second_log"
-  timeout 30 env "DISPLAY=$display_to_use" "$bin" --profile "$profile" >"$second_log" 2>&1
+  timeout 30 env "DISPLAY=$display_to_use" "HOME=$HARNESS_HOME" "XAUTHORITY=$HARNESS_XAUTHORITY" "$bin" --profile "$profile" >"$second_log" 2>&1
   second_rc=$?
   if [ "$second_rc" -eq 124 ]; then
     echo "side05-no-second-backend: FAIL -- SIDE-05 -- second launch against the same profile did not exit within 30s; log:" >&2
@@ -3603,7 +3679,7 @@ check_gui01_single_shell_window() {
   # in the second process's own (0-byte) log.
   local second_log second_rc
   second_log="$(mktemp)"; track_temp "$second_log"
-  timeout 30 env "DISPLAY=$display_to_use" "$bin" --profile "$profile" >"$second_log" 2>&1
+  timeout 30 env "DISPLAY=$display_to_use" "HOME=$HARNESS_HOME" "XAUTHORITY=$HARNESS_XAUTHORITY" "$bin" --profile "$profile" >"$second_log" 2>&1
   second_rc=$?
 
   if [ "$second_rc" -eq 124 ]; then
@@ -3666,6 +3742,8 @@ run_own_checks() {
     # and requires this exact un-flagged invocation's decision function to
     # reject it, with a clean control proving the red is plant-caused.
     "scan-brand-residue-self-test|node $REPO_ROOT/scripts/scan-brand-residue.mjs --self-test"
+    # redate-windows-self-test moved to the full tier (audit harness-driver-06, 59-CR-03): it loads gsd-core's
+    # parser from the developer's home, which neither the commit gate nor CI may run.
     # NEW (deploy, 2026-10-31): two GitHub organisations each hold a powerbrowser repository,
     # so a hand-typed owner points at the wrong one without failing anything else. Every
     # github.com/<owner>/<repo> reference in tracked code, workflows and generated output must
@@ -3812,6 +3890,12 @@ run_own_checks() {
     # Green first, then six plants (lock removed, not locked, value true, reader renamed, reader
     # removed, engine prefix dropped), each red naming the drifted file.
     "crash-autosubmit-lock-self-test|node $REPO_ROOT/scripts/verify-crash-autosubmit-lock.mjs --self-test"
+    # NEW (Phase 57, 57-08, WR-05; run in Phase 59 lane 59-02): MOZ_CRASHREPORTER_AUTO_SUBMIT is cleared first in
+    # PowerBrowserSingleInstanceHandler.handle via PowerBrowserAPI.clearEnv; name from config.rs + main.rs ekey!. Text reads only.
+    "crash-autosubmit-env|node $REPO_ROOT/scripts/verify-crash-autosubmit-env.mjs"
+    # Green first, then six plants (call removed, call moved after other work, different name, non-empty value,
+    # config.rs key renamed, env_bool reading any set value as true), each red naming the drifted file.
+    "crash-autosubmit-env-self-test|node $REPO_ROOT/scripts/verify-crash-autosubmit-env.mjs --self-test"
     "fetch-upstream-self-test|bash $REPO_ROOT/scripts/fetch-upstream.sh --self-test"
     # NEW (05-02): the ESR pin-agreement gate -- configuration.toml's
     # [upstreams] tag equals the generated shell fragment, the workflow
@@ -3821,6 +3905,411 @@ run_own_checks() {
     # other self-test row in this array gives.
     "verify-upstream-pins|node $REPO_ROOT/scripts/verify-upstream-pins.mjs"
     "verify-upstream-pins-self-test|node $REPO_ROOT/scripts/verify-upstream-pins.mjs --self-test"
+    # NEW (60-01, RUN-01): the Orca pin-agreement gate -- [upstreams] orca_tag and
+    # orca_commit, derived from configuration.toml at check time, equal the generated
+    # fragment, fetch-orca.sh reads them from it with no literal, no tracked file in
+    # scope carries them, orca/ is untracked and ignored (anchored), a fetched orca/ is
+    # at the commit, and flake.nix has devShells.orca. Quick: git and files only, no
+    # network. Its self-test plants nine faults, each red naming the drift.
+    # fetch-orca-self-test drives the clone-verify-rename logic against a local
+    # fixture remote (wrong commit, tag-object SHA, other tag, non-git target,
+    # leftover partial, TAG without COMMIT, fetch then re-run).
+    "orca-pin|node $REPO_ROOT/scripts/verify-orca-pin.mjs"
+    "orca-pin-self-test|node $REPO_ROOT/scripts/verify-orca-pin.mjs --self-test"
+    "fetch-orca-self-test|bash $REPO_ROOT/scripts/fetch-orca.sh --self-test"
+    # NEW (60-02, RUN-01/RUN-02): orca-build-shape's self-test. Quick: a mkdtemp
+    # fixture orca/ whose orcad-artifacts.ts constants carry synthetic marker names,
+    # so green proves the names are derived. Clean control first (with a .bin/electron
+    # shim and a scoped electron/dist that must stay green), then nine plants each red
+    # naming the drift: three markers, out/runtimes, a stray out/orcad/node, an
+    # electron/dist, an ELF electron, a modified tracked file, a removed constant.
+    "orca-build-shape-self-test|node $REPO_ROOT/scripts/verify-orca-build-shape.mjs --self-test"
+    # NEW (60-03, RUN-02): orca-slotless-start's self-test. Quick and hermetic: fixtures
+    # only, no orcad, no browser, no network. Green control first, then plants each red
+    # naming the drift: a ws://0.0.0.0 bind, Node 24.22.1 reported, two Node runtimes, an
+    # inherited ORCA_PAIRING_CODE in orcad's env, the pairing fragment unconsumed, no
+    # connected-host marker (derived from a fixture with synthetic templates), a terminal
+    # daemon surviving teardown; then the pairing-leak sentinel (seen with redaction off,
+    # absent with it on) and an installed-Orca path that must SKIP.
+    "orca-slotless-start-self-test|node $REPO_ROOT/scripts/verify-orca-slotless-start.mjs --self-test"
+    # NEW (61-02, BRW-01, P61-04): orca-browser-parity's self-test. Quick and hermetic: a
+    # mkdtemp fixture Orca tree whose browser abilities carry synthetic names, so green
+    # proves the ability set is derived. Clean control first, a no-tree fixture that must
+    # SKIP, then nine plants each red naming the drift: an orphan row, a missing row, an
+    # empty automation list, a renamed constant, a moved file, a renamed provider class,
+    # no CLI spec, a wrong component set, and a row for a renderer translation key.
+    "orca-browser-parity-self-test|node $REPO_ROOT/scripts/orca-browser-parity.mjs --self-test"
+    # NEW (60-04, OVL-04, P60-R1): the third-party licence allow-list. The set of fetched
+    # trees is derived from the tracked scripts/fetch-*.sh names and compared with the rows
+    # of inventory/licence-allowlist.json both ways; each row's SPDX id must be in
+    # allowed_spdx (which refuses empty, NONE, UNLICENSED and SEE LICENSE ...), and each
+    # present tree's LICENSE sha256 must equal its row. An absent tree is a named SKIP of
+    # that row only. Runtime-installed proprietary extensions are not rows: PowerBrowser
+    # never redistributes them. The self-test plants six faults in mkdtemp fixtures.
+    # Phase 68 (P68-24, P68-25, P68-38) adds the per-package rule over the bundle-derived Orca
+    # shipped set, the package_exceptions and package_rulings rows, PENDING lines that never
+    # change the exit status, and ten more plants plus three controls.
+    "licence-allowlist|node $REPO_ROOT/scripts/verify-licence-allowlist.mjs"
+    "licence-allowlist-self-test|node $REPO_ROOT/scripts/verify-licence-allowlist.mjs --self-test"
+    # NEW (62-01, OVL-01/OVL-05, P62-09/P62-10/P62-17): the Orca overlay gate. Derived at
+    # check time: the seam list from orca-overlay/seams.json, each seam's upstream blob from
+    # git -C orca rev-parse HEAD:<path>, the patched paths from the patches' diff headers,
+    # the changed-line counts from git apply --numstat. Steps that need orca/ SKIP by a line.
+    "orca-overlay|node $REPO_ROOT/scripts/verify-orca-overlay.mjs"
+    "orca-overlay-self-test|node $REPO_ROOT/scripts/verify-orca-overlay.mjs --self-test"
+    # NEW (62-02, RUN-03/RUN-04/RUN-05, P62-01..P62-19): orca-service, the orcad supervisor. Quick. Derived at
+    # check time: the shell's .sys.mjs set against jar.mn, the environment names from OrcaEnv.sys.mjs, the
+    # user-message table and window function names OrcaService must not carry, Orca's own default port and
+    # failure codes from the fetched orca/ (a named SKIP of those clauses when it is absent). The shipped
+    # OrcaService source is driven against a stub boundary through scenarios A to F and H (start, reap, stop
+    # order, busy port, non-loopback bind, data-root alias, no bridge folder; 63-06 adds H, orcad-data-root
+    # written into the bridge folder after ready and removed on stop, orcad's environment kept as Phase 62's,
+    # and the POWERBROWSER_ORCA_BRIDGE_DIR key compared with the orca-agents backend, a named SKIP while lane
+    # p63-03 is unmerged). The self-test copies the inputs and plants 27 faults.
+    "orca-service|node $REPO_ROOT/scripts/verify-orca-service.mjs"
+    "orca-service-self-test|node $REPO_ROOT/scripts/verify-orca-service.mjs --self-test"
+    # orca-hidden-electron-self-test: a fixture Orca tree whose orcad is a stand-in Node script; control green
+    # (stock run trips both detectors, switched run trips neither), then five faults each red naming it.
+    # orca-service-live-self-test: the live row's pure verdicts (environment set, quit survivors, reap, TCP rows)
+    # over fixtures, 25 cases. Both hermetic: no orcad, no browser, no network.
+    "orca-hidden-electron-self-test|node $REPO_ROOT/scripts/verify-orca-hidden-electron.mjs --self-test"
+    "orca-service-live-self-test|node $REPO_ROOT/scripts/verify-orca-service-live.mjs --self-test"
+    # NEW (63-06, EXT-02, P63-26/P63-35/P63-36): orca-bridge-dir, the chrome half of the bridge folder for linux,
+    # darwin and win32 (OrcaEnv's nodePlatform, bridgeDirFor and bridgeFileFor); the orcad-data-root literal joined
+    # across OrcaEnv, orca-agents' protocol file and its wrapper, a named SKIP of that join alone while lane p63-03
+    # is unmerged; and writePrivateFile's A-11 call order. Quick and hermetic; the self-test plants 10 faults.
+    "orca-bridge-dir|node $REPO_ROOT/scripts/verify-orca-bridge-dir.mjs"
+    "orca-bridge-dir-self-test|node $REPO_ROOT/scripts/verify-orca-bridge-dir.mjs --self-test"
+    # NEW (63-03, TERM-02/EXT-02, P63-15..P63-26): orca-agent-hooks-self-test. Pure verdicts over fixture
+    # observations (relay order, PTY hook names, wrapper identity, planted ORCA_ name, stdout, exit code, degrade)
+    # and fixture copies of the orca-agents sources (process.env reads, stdout writes, registerOverride, preference
+    # setters, settings.json); a child Node imports the real module and must print and start nothing.
+    "orca-agent-hooks-self-test|node $REPO_ROOT/scripts/verify-orca-agent-hooks.mjs --self-test"
+    # orca-agent-status-live-self-test: the live row's pure verdicts (status order, waiting, record growth, prompt
+    # cap, agent PTY under Orca's terminal daemon, quit survivors, bridge-folder files) over fixtures.
+    "orca-agent-status-live-self-test|node $REPO_ROOT/scripts/verify-orca-agent-status-live.mjs --self-test"
+    # NEW (68-03, OVL-03, P68-15/P68-26): orcad's mobile-facing protocol stays untouched (D-23). The protected set is
+    # derived from the pin: root 1 is every non-test file under orca/mobile/src followed transitively into orca/src;
+    # root 2 is runtime-rpc/ and ipc/mobile.ts, not expanded (a transitive root 2 reaches 40% of src/). Red on any
+    # seams.json path or orca-overlay/files path inside it; a printed SKIP when orca/ is not fetched.
+    "orca-mobile-protocol|node $REPO_ROOT/scripts/verify-orca-mobile-protocol.mjs"
+    "orca-mobile-protocol-self-test|node $REPO_ROOT/scripts/verify-orca-mobile-protocol.mjs --self-test"
+    # orca-mobile-skew-self-test: fixture tag listings and constants with no network, judged by Orca's own
+    # evaluateCompat from the pinned tree; plants desktop-too-old, mobile-too-old, no app tag, constants moved.
+    "orca-mobile-skew-self-test|node $REPO_ROOT/scripts/verify-orca-mobile-protocol.mjs --skew-self-test"
+    # orca-seam-export-self-test (OVL-06, P68-18/P68-36): a seam exported against a file:// fixture main with the
+    # template's derived headings, its overlay import's one pb-overlay: literal replaced, and no PB token left.
+    "orca-seam-export-self-test|node $REPO_ROOT/scripts/export-orca-seam-pr.mjs --self-test"
+    # NEW (68-01, PLAT-01, P68-06/P68-33): the packaged Orca root <GreD>/orca. Expected set derived from the built
+    # tree (package.json, out/orcad, out/web), slot-marker names from orca/src/shared/orcad-artifacts.ts, the
+    # node-pty slot from Orca's prebuild manifest (one slot, the target's platform and arch, equal sha256 set). The
+    # self-test plants a missing file, an extra file, node.exe, a slot marker, Electron, foreign and merged slots.
+    "orca-packaged-tree-self-test|node $REPO_ROOT/scripts/verify-orca-packaged-tree.mjs --self-test"
+    # build-orca.sh runs on every target's own runner: objdump only on Linux, no find -printf, the one pins path (P68-30).
+    "build-orca-portable-self-test|node $REPO_ROOT/scripts/verify-build-orca-portable.mjs --self-test"
+    # The macOS Orca merge plan from Orca's own tables: unpaired arch-named file, differing file, zero-pair table (P68-31).
+    "orca-macos-merge-self-test|node $REPO_ROOT/scripts/lib/orca-artifacts.mjs --self-test"
+    # The packaged-live verdicts over fixtures: a Node from elsewhere, a web root outside GreD, a survivor, no pairing;
+    # and the shared packaged teardown (lib/firefox-bidi.mjs, WINDOWS 54): extraction root from binPath, strays by root+ticks.
+    "orca-packaged-live-self-test|node $REPO_ROOT/scripts/verify-orca-packaged-live.mjs --self-test"
+    # NEW (68-07, BEXT-01, P68-38): orcad loads the Claude agent SDK only from ORCA_CLAUDE_AGENT_SDK_DIR (seam 070):
+    # the bundled loader runs S1-S5 in child nodes; the variable name carries no PowerBrowser token; the OrcaEnv table
+    # and TheiaService's config folder. SKIP of the loader without orca/. The self-test is hermetic: eight plants.
+    "orca-claude-sdk|node $REPO_ROOT/scripts/verify-orca-claude-sdk.mjs"
+    "orca-claude-sdk-self-test|node $REPO_ROOT/scripts/verify-orca-claude-sdk.mjs --self-test"
+    # NEW (68-09, BEXT-01, P68-38): the pre-installed Claude agent SDK extension. Manifest, lock (sha512 equal to Orca's
+    # pnpm-lock.yaml), quoted licence and README copy; the seed's behaviour table; a self-test planting seven faults.
+    "bundled-extensions|node $REPO_ROOT/scripts/verify-bundled-extensions.mjs"
+    "bundled-extensions-seed|node $REPO_ROOT/scripts/verify-bundled-extensions.mjs --seed"
+    "bundled-extensions-self-test|node $REPO_ROOT/scripts/verify-bundled-extensions.mjs --self-test"
+    # NEW (68-02, OVL-02, P68-10/P68-14/P68-28): the Orca re-pin replay. Hermetic: a file:// fixture Orca
+    # repository and a fixture PowerBrowser root driven through the same stage functions; control green,
+    # then each planted fault stops at its named stage (seam-apply, typecheck, coverage, rows, brand scan),
+    # and a row or probe that prints SKIP is red.
+    "rebase-orca-self-test|bash $REPO_ROOT/scripts/rebase-orca.sh --self-test"
+    # rebase-orca-coverage (OVL-02): the replay's typecheck coverage stage on this tree's fetched orca/: every
+    # orca-overlay/files path in tsc --listFilesOnly of Orca's two programs or orca-overlay/tsconfig.pb-build.json.
+    # A named SKIP without an installed orca/ or before build-orca.sh copied an overlay file in; the self-test's
+    # real-overlay cases (the real files green and counted, an uncovered root file red) hold without one.
+    "rebase-orca-coverage|bash $REPO_ROOT/scripts/rebase-orca.sh --coverage-only"
+    # NEW (64-01, TAB-04/TAB-06/TERM-01, P64-25/P64-32): orca-pane-entry-self-test and
+    # orca-pane-standalone-live-self-test. Hermetic: mkdtemp fixtures for the pane bundle's build gate (a tracked
+    # edit, a planted React copy, a version skew, an inlined font, a tab-bar import, a missing C3 export); fixture
+    # observations for the standalone row's verdicts (a second xterm in an isolated root, a marker in the other
+    # leaf, a grown handle count, a thrown mount, a blind error capture) and a silent child-Node import.
+    "orca-pane-entry-self-test|node $REPO_ROOT/scripts/verify-orca-pane-entry.mjs --self-test"
+    "orca-pane-standalone-live-self-test|node $REPO_ROOT/scripts/verify-orca-pane-standalone-live.mjs --self-test"
+    # orca-pane-css-self-test: the scoping pass (orca/pb-css-scope.mjs, equal to the overlay file) over fixture rules
+    # against expected output, then planted faults (a pseudo-element before the scope, an unprefixed keyframe, a
+    # scoped custom property, a dropped portal variant, an unscoped rule, a keyframe clash, a Theia var() read).
+    # orca-pane-css-live-self-test: the live row's pure verdicts (both directions, both controls, measured:false,
+    # the portal probe, the derived <html> clause and its probe sheet) over fixtures. Both hermetic.
+    "orca-pane-css-self-test|node $REPO_ROOT/scripts/verify-orca-pane-css.mjs --self-test"
+    "orca-pane-css-live-self-test|node $REPO_ROOT/scripts/verify-orca-pane-css-live.mjs --self-test"
+    # NEW (64-02, TAB-02/TAB-04/TAB-06/TERM-01, P64-25/P64-31): orca-pane-routes. Quick. Derived at check time with
+    # theia/node_modules/typescript: Orca's TabContentType members from the fetched orca/ compared as a set with
+    # ORCA_PANE_ROUTES' keys; each target a known kind or pending with a requirement id; the hosted words compared
+    # with docs/URI-SCHEMES.md's pb-orca: section; the bundle API and hand-off key against lane p64-01's entry and
+    # Vite config and the loader's module key and boot event against lane p64-04's orca-tabs-live.mjs (each a named
+    # SKIP of that clause alone while the other lane's file is absent); every table target handled by the observer;
+    # no client-side terminal creation in orca-panes or orca-overlay/files. A named SKIP when orca/ is not fetched.
+    # The self-test plants 13 faults in mkdtemp copies.
+    "orca-pane-routes|node $REPO_ROOT/scripts/verify-orca-pane-routes.mjs"
+    "orca-pane-routes-self-test|node $REPO_ROOT/scripts/verify-orca-pane-routes.mjs --self-test"
+    # NEW (64 validation, TAB-04 group clause): orca-pane-groups. The overlay's paneRecords group branch taken out of
+    # pb-pane-mount.tsx by name (typescript AST), run on two-group fixture stores, then fed to planPanes: the second
+    # group's new pane is a Lumino split. Cross-client publication stays orca-tabs-live g3's. SKIP without typescript.
+    "orca-pane-groups|node $REPO_ROOT/scripts/verify-orca-pane-groups.mjs"
+    "orca-pane-groups-self-test|node $REPO_ROOT/scripts/verify-orca-pane-groups.mjs --self-test"
+    # NEW (64-04, TERM-04, P64-33; D-32 since 64-06): orca-terminal-keys. From PAGE_KEYS' reserved rows (typescript):
+    # the shell keys (letter rows, ctrl+w and ctrl+t) compared both ways with orca-panes' ORCA_TERMINAL_PASSTHROUGH_KEYS;
+    # the switch keys (keycode rows) bound to Theia's NEXT_TAB/PREVIOUS_TAB with no when clause, paired by PAGE_SHORTCUTS'
+    # action bodies; the close key ctrl+shift+w bound to CLOSE_TAB; no passthrough row or other registration takes a
+    # switch or close key. Orca half (C13, a named SKIP only while orca/ is absent): the entry's in-memory policy is
+    # Orca's non-default 'terminal-first', no Orca terminal action active under it takes a D-32 key or a releasable
+    # control chord, and the remaining active chords print as a note. Linux selection-paste preset (owner ruling
+    # 2026-11-17, "Preset it ON on Linux, in memory"): the entry presets in its store the one setting Orca's switch writes,
+    # to true, under isLinuxUserAgent() until the user writes it, seen by a pass-through window.api.settings.set wrapper
+    # (its only reach of window.api.settings); Orca's default must still read process.platform; "Remember my 'off'": the
+    # preset is the user's last write, kept in one powerbrowser.orca. profile record orca-panes reads at boot and writes on
+    # the choice. First-show focus gate ("Fix now"): the props Orca's terminal layout restore focuses with and one chat
+    # reveal prop are the pane's activity (Theia's active widget, passed to mountPane by the orca-panes widget). orca-panes
+    # half a named SKIP only while its directory is absent. Self-test: 44 plants. orca-terminal-keys-live-self-test: D-32's and the
+    # paste and app-wide listener legs' pure verdicts over fixture observations plus a child-Node import-silence check.
+    "orca-terminal-keys|node $REPO_ROOT/scripts/verify-orca-terminal-keys.mjs"
+    "orca-terminal-keys-self-test|node $REPO_ROOT/scripts/verify-orca-terminal-keys.mjs --self-test"
+    "orca-terminal-keys-live-self-test|node $REPO_ROOT/scripts/verify-orca-terminal-keys-live.mjs --self-test"
+    # orca-tabs-live-self-test (64-04, P64-25/P64-35): orca-tabs-live's pure verdicts, each over a passing fixture and
+    # one fixture per failure (late addWidget, a second widget for one pane, split direction, tab groups, remount,
+    # Organising key, tab chrome in Theia, a blind detector, close, reload, route, offer, OWNER-ITEM), plus a child-Node
+    # import-silence check. Hermetic.
+    "orca-tabs-live-self-test|node $REPO_ROOT/scripts/verify-orca-tabs-live.mjs --self-test"
+    # NEW (65-02, TAB-05, P65-01/P65-27): orca-editor-routes derives, from the pinned Orca source with typescript, the
+    # OpenFile modes, the editor-type TabContentType members (through editorTabContentTypeForMode), DiffSource and
+    # GitConflictKind, and compares each with orca-workspace's ORCA_EDITOR_ROUTES keys; every value a Theia kind but the
+    # named check-details row; TopLevelView vs ORCA_PAGE_ROUTES once lane p65-04's restore directory exists. The
+    # self-test also transpiles routeOpenFile and checks the CA-01..CA-03 sides of 21 records.
+    "orca-editor-routes|node $REPO_ROOT/scripts/verify-orca-editor-routes.mjs"
+    "orca-editor-routes-self-test|node $REPO_ROOT/scripts/verify-orca-editor-routes.mjs --self-test"
+    # orca-git-spec-self-test (65-02, P65-03/CA-06, T-65-04/T-65-05): the pb-orca-git: argv and grammar; 17 planted
+    # refusals; a subdirectory root refused; hermetic bytes equal git cat-file blob with GIT_DIR planted.
+    "orca-git-spec-self-test|node $REPO_ROOT/scripts/verify-orca-editor-routes.mjs --git-spec-self-test"
+    # orca-workspace-live-self-test (65-02, P65-05/P65-06/P65-07): the live row's comparators on fixtures (wrong revision
+    # text, missing and extra root, dirty editor closed, key left behind, Untitled file, reload) and planRoots,
+    # noteUserRemovals and planMigration from orca-root-sync.ts against the plan's behaviour list.
+    "orca-workspace-live-self-test|node $REPO_ROOT/scripts/verify-orca-workspace-live.mjs --self-test"
+    # NEW (65-03, TAB-09, P65-15): orca-no-pb-add-project. Vocabulary from Orca's sidebar (translate defaults matching
+    # 'add (a )?project' and the add-repo entry); PB set from theia/extensions/*/src and the chrome bar; empty intersection.
+    "orca-no-pb-add-project|node $REPO_ROOT/scripts/verify-orca-no-pb-add-project.mjs"
+    "orca-no-pb-add-project-self-test|node $REPO_ROOT/scripts/verify-orca-no-pb-add-project.mjs --self-test"
+    # orca-side-panel-live-self-test and orca-add-project-live-self-test (65-03, P65-24/P65-14): the live rows' pure
+    # comparators over fixtures (missing or extra sidebar row, agents part stayed, container leaked, control host
+    # absent, unlisted host; unequal or missing add, remove left a row, owned root kept). Hermetic.
+    "orca-side-panel-live-self-test|node $REPO_ROOT/scripts/verify-orca-side-panel-live.mjs --self-test"
+    "orca-add-project-live-self-test|node $REPO_ROOT/scripts/verify-orca-add-project-live.mjs --self-test"
+    # NEW (65-04, TAB-08, P65-23/P65-31): orca-offer-scan-self-test plants a fixture offer, in every needle form derived
+    # from Orca's own encoders (web-pairing.ts, pairing.ts, createWebClientUrl), into copies of setups.json and the shell
+    # state, and runs the node:sqlite key probe with and without its marker (collector blind) and with the runtime key.
+    # orca-relaunch-restore-live-self-test: the relaunch comparators (dock, modes, identity, echo, pairing UI, devices).
+    "orca-offer-scan-self-test|node $REPO_ROOT/scripts/verify-orca-offer-scan.mjs --self-test"
+    "orca-relaunch-restore-live-self-test|node $REPO_ROOT/scripts/verify-orca-relaunch-restore-live.mjs --self-test"
+    # NEW (66-01, BRW-03, P66-30/A3/A9): orca-browser-host-bundle-self-test. Hermetic fixtures over the real host, link and
+    # pane-entry sources; plants a web-runtime-client.ts reach, a constant write, a private subscribe, an inlined asset,
+    # a tracked edit, a token over v2, a link without the placement, an empty module list and an entry without the link.
+    "orca-browser-host-bundle-self-test|node $REPO_ROOT/scripts/verify-orca-browser-host-bundle.mjs --self-test"
+    # NEW (66-02, BRW-02/BRW-03, P66-05/P66-12/P66-19): orca-browser-abilities derives the 92 abilities, the automation
+    # methods and the tier column with orca-browser-parity.mjs's own exports and requires one row per ability in
+    # @powerbrowser/orca-browser's table, tiers equal, tier-1 rows never unavailable, no BiDi mechanism, dialogs native,
+    # and the tier-1 automation set equal to the served set and (once lane p66-03 is merged, a named SKIP before) to
+    # chrome's AGENT_METHODS; it also runs the dispatcher's page-command and reveal trace (typescript transpile).
+    # The self-test plants each fault in a hermetic fixture tree.
+    "orca-browser-abilities|node $REPO_ROOT/scripts/verify-orca-browser-abilities.mjs"
+    "orca-browser-abilities-self-test|node $REPO_ROOT/scripts/verify-orca-browser-abilities.mjs --self-test"
+    # NEW (66-02, BRW-02, P66-10, A3): orca-browser-entry-points derives from the pinned Orca source (typescript) the
+    # page-mounting components under components/browser-pane/ (a webview element or a pointer-driven stream surface,
+    # directly or through imports in that directory), the callers of createBrowserTab and createWebRuntimeSessionBrowserTab,
+    # and TabContentType's browser member; it walks the PB pane entry's import graph (overlay files at their in-tree
+    # paths) and requires that it reaches no page-mounting component, that the browser route is pb-web-tab, that each
+    # caller is listed reachable or dead with its reason, and that the host bundle's served prefix is orca-panes' route.
+    # Cross-lane: the link import, the placement assignment, HOST_EXPORTS and the link key/event are compared with lane
+    # p66-01's files, a named SKIP while pb-browser-host-link.ts is absent. The self-test plants each fault in a fixture.
+    "orca-browser-entry-points|node $REPO_ROOT/scripts/verify-orca-browser-entry-points.mjs"
+    "orca-browser-entry-points-self-test|node $REPO_ROOT/scripts/verify-orca-browser-entry-points.mjs --self-test"
+    # NEW (66-03, BRW-03/BRW-04, P66-06/P66-12/P66-30, A1): orca-browser-tab-scope evaluates the shipped agent section of
+    # PowerBrowserAPI.sys.mjs, webTabOpen, webTabGeometry and the agent arms in node:vm over a stub boundary: an agent
+    # call on a user, unknown or foreign tab reaches no page work, the flag is set only at creation, unshown agent tabs
+    # are parked and user tabs never are, and every overlay visibility read goes through overlayShownToUser. 66-08
+    # (D-35): every open path installNewWindowReceivers installs (derived) opens nothing for an agent-overlay opener at
+    # every location, the browserDOMWindow members throw, refusals log once and fail the command in flight, and agent
+    # overlays load with SANDBOXED_AUXILIARY_NAVIGATION.
+    "orca-browser-tab-scope|node $REPO_ROOT/scripts/verify-orca-browser-tab-scope.mjs"
+    # orca-browser-tab-scope-self-test: 17 plants on in-memory copies (wall, flag, parking, raw read, Stop, idle,
+    # container attribute, cookie container, wall container check, parked focus, agent group, dialog
+    # types, pinned LoginManager groups, page table x3, empty method list), plus 66-08's D-35 plants: the link, InFrame
+    # and in-process guards, null instead of a throw, the content wall, the command code, the log rule, a blinded
+    # derivation, and one generated plant per derived open path.
+    "orca-browser-tab-scope-self-test|node $REPO_ROOT/scripts/verify-orca-browser-tab-scope.mjs --self-test"
+    # NEW (66-04, BRW-03, A5): orca-snapshot-fixtures and orca-browser-snapshot-live-self-test. The snapshot fixtures
+    # under scripts/fixtures/orca-snapshot/ come from the pinned agent-browser binary, never from a hand-written tree;
+    # their recorded version must equal orca/'s installed agent-browser and sit inside orca/package.json's tilde range.
+    # On a re-pin that moves agent-browser, re-run node scripts/gen-orca-snapshot-fixtures.mjs (SKIP without orca/).
+    # The self-test plants 12 faults over in-memory and mkdtemp fixtures (ref'd node, renumbered ref, grammar, token,
+    # delta kind, click target, stale code, empty set, version, range, missing json, missing afterChange).
+    "orca-snapshot-fixtures|node $REPO_ROOT/scripts/verify-orca-browser-snapshot-live.mjs --fixtures"
+    "orca-browser-snapshot-live-self-test|node $REPO_ROOT/scripts/verify-orca-browser-snapshot-live.mjs --self-test"
+    # NEW (66-05, BRW-05, P66-24/P66-25): orca-browser-tools parses spike 005's U-rows (U-01..U-30) and compares them as a
+    # set with ORCA_BROWSER_TOOLS (typescript transpile), then proves each mapped contribution exists: a command id in a
+    # registerCommand call, a render method defined and called in chrome-bar-widget.tsx, a kind in verify-web-tab-bridge's
+    # KIND_CLASSES, a deferral in REQUIREMENTS.md's v2 section, a non-empty skip reason. The self-test plants each fault.
+    "orca-browser-tools|node $REPO_ROOT/scripts/verify-orca-browser-tools.mjs"
+    "orca-browser-tools-self-test|node $REPO_ROOT/scripts/verify-orca-browser-tools.mjs --self-test"
+    # orca-browser-agent-live-self-test and orca-agent-mark-live-self-test: the live rows' pure verdicts over a control
+    # observation set, each planted fault (two tabs for one page, a user blur, a blind detector, a decoy marker, the
+    # owner code read from error.code, a stock window judged before the mark was proven, ...) going red by name.
+    "orca-browser-agent-live-self-test|node $REPO_ROOT/scripts/verify-orca-browser-agent-live.mjs --self-test"
+    "orca-agent-mark-live-self-test|node $REPO_ROOT/scripts/verify-orca-agent-mark-live.mjs --self-test"
+    # NEW (67-01, RUN-06/RUN-09, P67-02..P67-06, P67-16..P67-20): orca-failure-classes derives OrcaService's failed
+    # steps (_fail and step: literals), OrcaEnv's ORCAD_*_CODE values and, with typescript over the pinned Orca source,
+    # PairingOfferUnavailableReason and WebRuntimeAuthFailureReason, and requires each to land in exactly one of the
+    # eight classes, every class reached. Lane p67-03's copy and offer-policy files print one named SKIP while absent.
+    # The self-test plants an added Orca reason, a removed class, a class without copy, an unmapped step and more.
+    "orca-failure-classes|node $REPO_ROOT/scripts/verify-orca-failure-classes.mjs"
+    "orca-failure-classes-self-test|node $REPO_ROOT/scripts/verify-orca-failure-classes.mjs --self-test"
+    # orca-credential-store derives from the pin the plaintext override's name and trigger value, isTemporaryKeyDir's
+    # roots and the written key-record backends, and requires PB's override pair, a superset of the roots, the name off
+    # orcad's allowlist and the privacy.html data-orca-credential-protection sentence while only host-file is written.
+    # orca-credential-store-live-self-test is the live row's pure verdicts (null report, pending string, walker blind).
+    "orca-credential-store|node $REPO_ROOT/scripts/verify-orca-credential-store.mjs"
+    "orca-credential-store-self-test|node $REPO_ROOT/scripts/verify-orca-credential-store.mjs --self-test"
+    "orca-credential-store-live-self-test|node $REPO_ROOT/scripts/verify-orca-credential-store-live.mjs --self-test"
+    # NEW (owner ruling 2026-11-15, Scratch HOME): live-scratch-home derives every spawn/execFile/exec/fork call under
+    # scripts/ that launches PowerBrowser (--profile in either quote, FIREFOX_BIN, binPath), orcad, the Orca CLI or claude,
+    # and requires each to pass env: liveEnv(...) (lib/firefox-bidi.mjs: a per-run scratch HOME and XDG folders, asserted
+    # at launch); every "$bin" --profile line in scripts/*.sh must set HOME= (verify-endpoints.sh is a named exemption).
+    # It also runs the scratch HOME's lifetime in child nodes: removal on exit, SIGINT, SIGTERM, SIGHUP, the sweep after a
+    # SIGKILL, and the compare-and-swap write-back of a refresh token claude rotated (68-11-REVIEW CR-01, CR-02, WR-01).
+    # The self-test plants each launch form, each lifetime fault and a guard that accepts the real HOME.
+    "live-scratch-home|node $REPO_ROOT/scripts/verify-live-scratch-home.mjs"
+    "live-scratch-home-self-test|node $REPO_ROOT/scripts/verify-live-scratch-home.mjs --self-test"
+    # NEW (2026-11-16 gate): the run loop's leak leg (scripts/verify-orcad-leak.mjs) turns a script row red when an orcad
+    # outlives it in the row's own session, and stops it. The self-test derives the orcad entry from OrcaService, and plants a
+    # detached orcad-shaped process (red, stopped) beside a non-orcad survivor (green, alive). Audit-fix H1: a detached orcad
+    # carrying the row's PB_VERIFY_ROW_TOKEN is a leak too, --sweep stops other survivors, and lib/orca-run.mjs stops the
+    # orcad processes it started on a rejected start, an exit and a signal (each fix planted out of a copy must go red). That the
+    # driver runs the leg and acts on it is verify-platform-driver-self-test's (harness-driver-08).
+    # 2026-11-17: a planted row that opts out of withFirefoxPage's stray stop (keepStrays) and leaks must still go red;
+    # the same row without the opt-out is green, its teardown having stopped the orcad.
+    "orcad-leak-self-test|node $REPO_ROOT/scripts/verify-orcad-leak.mjs --self-test"
+    # NEW (audit-fix H1, harness-driver-01/-05/-08): this driver's own verdicts, by running a staged copy of it in
+    # fixture mode over planted rows: PASS, SKIP by exit 77, SKIP by a SKIP last line on exit 0, FAIL, and --gate's
+    # keyed exclusions (an unexcused SKIP, a different or second FAIL in an excluded row, a fixed entry). Each planted
+    # driver fault (the SKIP rule, exit 77, the gate's SKIP pass, the pattern, mode only, the ledger check) must go red.
+    # Also the leak leg over a row's group and token, the survivor sweep, and the live lock (harness-live-tabs-14).
+    "verify-platform-driver-self-test|node $REPO_ROOT/scripts/verify-platform-driver.mjs --self-test"
+    # NEW (audit-fix H1, harness-driver-03): hosted CI runs every scripts/fetch-*.sh (derived from the tree) before
+    # its --quick table, so the quick rows that read a pinned third-party checkout assert in CI instead of skipping.
+    "ci-fetches|node $REPO_ROOT/scripts/verify-ci-fetches.mjs"
+    "ci-fetches-self-test|node $REPO_ROOT/scripts/verify-ci-fetches.mjs --self-test"
+    # NEW (audit-fix integration, 2026-11-21): the static checks the v1.7 audit-fix lanes added with their fixes. Each
+    # derives its expectation from the tree, and its --self-test plants the pre-fix fault and requires red. The item
+    # ids each one covers are in .planning/workstreams/orca/audit-fix/results/<lane>.md.
+    # G1a chrome shell: agent tabs keep their agent status, cookie rows act on the current site, Stop covers the frontend,
+    # the loopback wall for agent pages, result budget, edit route in agent overlays.
+    # Its self-test (40 planted faults, about 30 s) is in the full tier below.
+    "agent-tab-walls|node $REPO_ROOT/scripts/verify-agent-tab-walls.mjs"
+    # G2 orcad hosting: the lifetime tie, restart, quit ordering, hand-off file removal, the crash window. Its self-test
+    # runs about two minutes on real stand-in processes and is in the full tier below.
+    "orcad-lifecycle|node $REPO_ROOT/scripts/verify-orcad-lifecycle.mjs"
+    # G3a overlay renderer: CSS scope, leaf-addressed split close, guarded store listener, retryable bootstrap, hydration.
+    "orca-overlay-renderer|node $REPO_ROOT/scripts/verify-orca-overlay-renderer.mjs"
+    "orca-overlay-renderer-self-test|node $REPO_ROOT/scripts/verify-orca-overlay-renderer.mjs --self-test"
+    # G3b pane hosting: the boot and restart state machine, offer policy against orcad's own port, terminal re-key, and
+    # the custom-mode rename with its single write queue.
+    "orca-pane-hosting|node $REPO_ROOT/scripts/verify-orca-pane-hosting.mjs"
+    "orca-pane-hosting-self-test|node $REPO_ROOT/scripts/verify-orca-pane-hosting.mjs --self-test"
+    "mode-store-migration|node $REPO_ROOT/scripts/verify-mode-store-migration.mjs"
+    "mode-store-migration-self-test|node $REPO_ROOT/scripts/verify-mode-store-migration.mjs --self-test"
+    # G4 workspace and agents: absent diff sides and git reads that never fetch, the editor router, the crash-safe seeded
+    # upgrade, the claude wrapper's pane handling, the token cookie.
+    "orca-git-sides|node $REPO_ROOT/scripts/verify-orca-git-sides.mjs"
+    "orca-git-sides-self-test|node $REPO_ROOT/scripts/verify-orca-git-sides.mjs --self-test"
+    "orca-editor-router|node $REPO_ROOT/scripts/verify-orca-editor-router.mjs"
+    "orca-editor-router-self-test|node $REPO_ROOT/scripts/verify-orca-editor-router.mjs --self-test"
+    "bundled-extensions-upgrade|node $REPO_ROOT/scripts/verify-bundled-extensions-upgrade.mjs"
+    "bundled-extensions-upgrade-self-test|node $REPO_ROOT/scripts/verify-bundled-extensions-upgrade.mjs --self-test"
+    "claude-wrapper-pane|node $REPO_ROOT/scripts/verify-claude-wrapper-pane.mjs"
+    "token-cookie-shadow|node $REPO_ROOT/scripts/verify-token-cookie-shadow.mjs"
+    "token-cookie-shadow-self-test|node $REPO_ROOT/scripts/verify-token-cookie-shadow.mjs --self-test"
+    # G5a CI and release: build and fetch script order, same-run artifact digests for credential-holding jobs, npm on win32.
+    "orca-build-scripts|node $REPO_ROOT/scripts/verify-orca-build-scripts.mjs"
+    "orca-build-scripts-self-test|node $REPO_ROOT/scripts/verify-orca-build-scripts.mjs --self-test"
+    "ci-release-integrity|node $REPO_ROOT/scripts/verify-ci-release-integrity.mjs"
+    "ci-release-integrity-self-test|node $REPO_ROOT/scripts/verify-ci-release-integrity.mjs --self-test"
+    "win-spawn|node $REPO_ROOT/scripts/verify-win-spawn.mjs"
+    "win-spawn-self-test|node $REPO_ROOT/scripts/verify-win-spawn.mjs --self-test"
+    # G1b agent browser: the browser host, the host bundle and the link run against a fake orcad that checks every
+    # request against the params schema the pinned orcad declares (pageMetadata fields, re-attach, call timeouts).
+    "orca-browser-host-wire|node $REPO_ROOT/scripts/verify-orca-browser-host-wire.mjs"
+    "orca-browser-host-wire-self-test|node $REPO_ROOT/scripts/verify-orca-browser-host-wire.mjs --self-test"
+    # H5 live security: the shared live-row libraries (launch environment, live lock, verdict coverage) proven by plants
+    # without a browser, including the decoy-HOME clause that could not go red before.
+    "live-harness-libs-self-test|node $REPO_ROOT/scripts/verify-live-harness-libs.mjs --self-test"
+    # H8 other checks: the snapshot-fixture generator builds its child environment only through its allowlist helper and
+    # gives every child the scratch working directory (source-text assertions over the generator itself, 8 plants).
+    "gen-orca-snapshot-fixtures-self-test|node $REPO_ROOT/scripts/gen-orca-snapshot-fixtures.mjs --self-test"
+    # G5a CI and release: the wrapper every workflow and script uses to call a check that can skip. A check that did
+    # not run (exit 77, or exit 0 with a SKIP line) is red there unless the call names the documented case.
+    "run-no-skip-self-test|bash $REPO_ROOT/scripts/run-no-skip.sh --self-test"
+    # H7 live panels: the page-furniture row prints only the length and a known-value classification of a clipboard it
+    # read, never its text (the redaction, proven without a browser; the row itself is full-tier).
+    "page-furniture-live-redaction-self-test|node $REPO_ROOT/scripts/verify-page-furniture-live.mjs --redaction-self-test"
+    # G5b packaging and docs: the release runner unit (work directory, sandbox overrides for rootless podman, no libvirtd
+    # group), the packaged tree carrying the claude wrapper and Orca's licence where the backend resolves them, and the
+    # endpoint allowlist against the hosts Orca hosting contacts, compared as a set with the privacy page.
+    "legion-runner-unit|node $REPO_ROOT/scripts/verify-legion-runner-unit.mjs"
+    "legion-runner-unit-self-test|node $REPO_ROOT/scripts/verify-legion-runner-unit.mjs --self-test"
+    "packaging-staging|node $REPO_ROOT/scripts/verify-packaging-staging.mjs"
+    "packaging-staging-self-test|node $REPO_ROOT/scripts/verify-packaging-staging.mjs --self-test"
+    "orca-egress|node $REPO_ROOT/scripts/verify-orca-egress.mjs"
+    "orca-egress-self-test|node $REPO_ROOT/scripts/verify-orca-egress.mjs --self-test"
+    # NEW (v1.7 audit fix, lane H9, harness-static-structure-02): the reporter of the ext-tab-host-live row, hermetic.
+    # A leg that was not reached exits 77 with the SKIP line last, a failure wins, and the pre-fix reporter (PASS with a
+    # skipped leg) goes red. Runs before the row creates its server; no browser, no display, no network.
+    "ext-tab-host-live-verdict-self-test|node $REPO_ROOT/scripts/verify-ext-tab-host-live.mjs --verdict-self-test"
+    # NEW (67-03, RUN-06/RUN-07, P67-01..P67-09, P67-32): orca-offer-file judges real lstat results of a temp folder
+    # through orca-panes' offer-file-policy.ts (type-stripped): symlink, non-regular, other owner, group/other bits,
+    # missing, non-loopback or mismatched endpoint, undecodable text; OFFER_REFUSAL_REASONS against the copy table's
+    # (and, once merged, OrcaEnv's) offer-* client reasons; decodeOffer against Orca's pinned parser (SKIP without
+    # orca/); and handOff's order (lstat and the verdict before the read, both offer verdicts before the return, no
+    # value in a returned error or log line). The self-test plants six faults and requires each red by rule.
+    "orca-offer-file|node $REPO_ROOT/scripts/verify-orca-offer-file.mjs"
+    "orca-offer-file-self-test|node $REPO_ROOT/scripts/verify-orca-offer-file.mjs --self-test"
+    # orca-failure-page-live-self-test: the live row's pure verdicts (a text not in the table, another class's text, a
+    # missing or extra button, no page, a blind control, a page up before the induction, no recovery in the bound).
+    "orca-failure-page-live-self-test|node $REPO_ROOT/scripts/verify-orca-failure-page-live.mjs --self-test"
+    # NEW (67-04, RUN-07, P67-08..P67-12, A-8): orca-pairing-containment-self-test plants a synthetic offer in every
+    # sink of a fixture profile (history row and WAL, mozlz4 session file, Setups, log, data root, address, diagnostics,
+    # tab-address copy, profile file, bridge folder mode and stray copy, non-loopback endpoint and listener) and requires
+    # each red naming its sink; each collector's control is found first and a blind one is red. The five holders (registry
+    # set derived from the pin) stay green. One scanner: scripts/lib/orca-offer-scan.mjs (P65-23), mozlz4 in scripts/lib.
+    "orca-pairing-containment-self-test|node $REPO_ROOT/scripts/verify-orca-pairing-containment.mjs --self-test"
+    # NEW (67-05, INJ-01, P67-22..P67-26): orca-landing-selectors derives the pinned Orca version, its entry in
+    # OrcaEnv.ORCA_LANDING_SELECTORS and the built Landing chunk, and requires every class token in a className string,
+    # the tile's className pair unique across out/web/assets/*.js with an img inside it, and logoAnswerFor answering
+    # only orcad's own port (not the sidecar's, not the shell-embedded sender, not an unknown version). SKIP of the
+    # bundle clauses without an Orca build. orca-landing-logo-live-self-test is the live row's pure verdicts.
+    "orca-landing-selectors|node $REPO_ROOT/scripts/verify-orca-landing-selectors.mjs"
+    "orca-landing-selectors-self-test|node $REPO_ROOT/scripts/verify-orca-landing-selectors.mjs --self-test"
+    "orca-landing-logo-live-self-test|node $REPO_ROOT/scripts/verify-orca-landing-logo-live.mjs --self-test"
+    # NEW (68-08, BEXT-02, P68-39): uBlock Origin pre-installed through the distribution directory
+    # (<GreD>/distribution/extensions/<id>.xpi, removable, no policy entry). The pin file's shape; with the download
+    # cached in .mozbuild/bundled-xpi/, its sha256, manifest id and version equal the pin and it is signed. A named
+    # SKIP of the cached legs when nothing is cached.
+    "bundled-xpi|node $REPO_ROOT/scripts/verify-bundled-xpi.mjs"
+    # bundled-xpi-self-test: hermetic fixture XPIs in mkdtemp; control green, then eight plants red (sha256, manifest id,
+    # signature, missing allow row, stale BEXT-02 row, extra packaged XPI, rule only in !#if, http url) and the live
+    # row's plant audit (each plant read by its scenario and naming text its red scenario emits).
+    "bundled-xpi-self-test|node $REPO_ROOT/scripts/verify-bundled-xpi.mjs --self-test"
     "allowlist-schema|check_allowlist_schema"
     "allowlist-doc-consistency|check_allowlist_doc_consistency"
     "allowlist-doc-consistency-self-test|check_allowlist_doc_consistency_self_test"
@@ -4161,9 +4650,10 @@ run_own_checks() {
 
     # NEW (14-03): GUI-09's dependent-window content gate. The static half
     # derives the built secondary asset, the membership pins, and the
-    # closed-state copy at check time; the live half (extraction, geometry,
-    # close-matrix through the probe harness) runs in the full suite only,
-    # so this row is honestly --quick while its live counterpart is not.
+    # closed-state copy at check time. The live half (extraction, geometry,
+    # close-matrix through the probe harness) is not run by any row: the
+    # script's --live mode cites a recorded probe verdict, and a row for it
+    # is the owner's to add (v1.7 audit remediation, lane H9).
     # The self-test rides alongside for the reason every other self-test
     # row in this array gives.
     "gui09-dependent-window-content|node $REPO_ROOT/scripts/verify-dependent-window-content.mjs"
@@ -5733,9 +6223,35 @@ run_own_checks() {
     # patch URL, a verifier script carrying the form inside its selfTest).
     "update-download-host|node $REPO_ROOT/scripts/verify-update-download-host.mjs"
     "update-download-host-self-test|node $REPO_ROOT/scripts/verify-update-download-host.mjs --self-test"
+    # NEW (v1.7 refactor pass, lane R1a): no async result is returned unawaited inside a try with a catch in
+    # PowerBrowserAPI.sys.mjs, where a rejection would skip the catch and reach the reply as raw error text. The async
+    # callees are derived from the file with acorn (theia/node_modules); the self-test plants each pre-fix return.
+    "api-try-return-await|node $REPO_ROOT/scripts/verify-api-try-return-await.mjs"
+    "api-try-return-await-self-test|node $REPO_ROOT/scripts/verify-api-try-return-await.mjs --self-test"
+    # NEW (v1.7 refactor pass, lane R4): no widget class in theia/extensions declares its own toDispose field, which
+    # replaces the collection BaseWidget fills in its constructor so dispose() never fires onDidDispose or unmounts the
+    # React root. Derived from every extension source file; the self-test plants the pre-fix field in the tab strip.
+    "widget-dispose-collection|node $REPO_ROOT/scripts/verify-widget-dispose-collection.mjs"
+    "widget-dispose-collection-self-test|node $REPO_ROOT/scripts/verify-widget-dispose-collection.mjs --self-test"
+    # NEW (v1.7 refactor pass, lane R5): a newer mode or setup notice restarts the removal timer, so an older notice's
+    # timer cannot remove it early. Derived from every flash method that sets a timer and removes the element; the
+    # self-test plants the pre-fix body at each site.
+    "modes-notice-timer|node $REPO_ROOT/scripts/verify-modes-notice-timer.mjs"
+    "modes-notice-timer-self-test|node $REPO_ROOT/scripts/verify-modes-notice-timer.mjs --self-test"
+    # NEW (v1.7 refactor pass, lane R3): in address-bar.tsx every exit of a member that invalidates the query in
+    # flight clears the shimmer row when it starts no query and leaves it when it starts one, so no loading row is
+    # left with nothing pending and none blinks while typing. Derived from the file; the self-test plants four faults.
+    "address-bar-shimmer|node $REPO_ROOT/scripts/verify-address-bar-shimmer.mjs"
+    "address-bar-shimmer-self-test|node $REPO_ROOT/scripts/verify-address-bar-shimmer.mjs --self-test"
   )
+  # Every row appended below is full tier: it may launch a browser or a daemon, so it runs under the live lock.
+  local quick_rows=${#CHECKS[@]}
 
   if [ "$QUICK" -eq 0 ]; then
+    # "Run under flock .../pb-live.lock" in a row comment below means the live-lock contract (SKIP-PROTOCOL.md,
+    # "The live lock"): the driver takes the lock before the first of these rows and exports PB_LIVE_LOCK_HELD=1 and
+    # PB_LIVE_LOCK_HOLDER. Run by hand, `flock <git common dir>/pb-live.lock node <row>` is the ancestor case; never
+    # set PB_LIVE_LOCK_HELD by hand, since /proc/locks, not the variable, is what the driver and the rows trust.
     CHECKS+=(
       # NEW (Phase 48, TEL-06): the live loopback delivery drill. Full tier: it needs the nix theia shell
       # (a frontend rebuild), the built binary through the BiDi harness, and a free loopback port. It binds
@@ -6017,6 +6533,8 @@ run_own_checks() {
       # rides full-tier. No logic duplicated -- the registry invokes, the
       # scripts prove.
       "sql-store-soak-live|node $REPO_ROOT/scripts/verify-sql-store-soak.mjs --live"
+      # WINDOWS 72: the script preloader leaves its startup phase before its cache write.
+      "script-preloader-startup-live|node $REPO_ROOT/scripts/verify-script-preloader-startup-live.mjs"
       "sql-store-roundtrip|node $REPO_ROOT/scripts/verify-sql-store-roundtrip.mjs"
       "sql-store-roundtrip-self-test|node $REPO_ROOT/scripts/verify-sql-store-roundtrip.mjs --self-test"
       "sql-store-absence|node $REPO_ROOT/scripts/verify-sql-store-absence.mjs"
@@ -6176,7 +6694,8 @@ run_own_checks() {
       # NEW (Phase 34 plan 01): the tab strip on the built binary, every scenario
       # in scripts/verify-tab-strip-live.mjs (34-01 lands menu; 34-02..05 add theirs:
       # twelve, ending with bookmark-all and modes). Needs the built binary and the
-      # last Theia app build; bookmark-all is NOT SCORED until Phase 33's bookmarkPage lands.
+      # last Theia app build; bookmark-all is NOT SCORED until Phase 33's bookmarkPage lands. middle is
+      # NOT SCORED while a built Orca pane bundle has not booted, and its Theia-frame paste must be the sentinel.
       "tab-strip-live|node $REPO_ROOT/scripts/verify-tab-strip-live.mjs"
       "tab-strip-live-self-test|node $REPO_ROOT/scripts/verify-tab-strip-live.mjs --self-test"
 
@@ -6377,7 +6896,255 @@ run_own_checks() {
       # configuration.toml and checked against package-windows.sh's glob. Plants an extra PE file, a missing
       # unconditional one, an unsafe name, an empty tree and an unreadable manifest over mkdtemp fixtures; hermetic.
       "win-sign-list-self-test|node $REPO_ROOT/scripts/win-sign-list.mjs --self-test"
+      # NEW (60-02, RUN-01/RUN-02): orca-build-shape. Full tier: walks the built orca/
+      # including node_modules. Slot marker names derived from orca/src/shared/orcad-artifacts.ts
+      # at check time; red on a marker in out/orcad, out/runtimes, any node/node.exe under
+      # out/, an ELF/PE electron binary or node_modules/electron/dist anywhere under orca/,
+      # or a modified tracked Orca file. Prints one SKIP line when no built orca/ exists.
+      "orca-build-shape|node $REPO_ROOT/scripts/verify-orca-build-shape.mjs"
+      # NEW (60-03, RUN-02, P59-04, P59-05): orca-slotless-start, the permanent re-pin proof
+      # (the Phase 68 re-pin job re-runs it on every Orca tag). Full tier: starts the built
+      # orcad on the official Node from powerbrowser/packaging/node-runtime.json (sha256-checked,
+      # extracted to .mozbuild/orca-probe-node), scrubbed env, --bind 127.0.0.1 --port 0.
+      # Derived at check time: Node version from node-runtime.json, ORCA_VERSION from
+      # generated/upstream-pins.env, the runtime set from /proc plus orca/out, the
+      # installed-Orca paths from orcad-browser-provider.ts, the connected-host marker from
+      # the client's ssh-status-segment-copy.ts. Red on a non-loopback bind, a Node other than
+      # the pin, more than one runtime, an unpaired PB web tab, or orcad or its terminal daemon
+      # surviving teardown. The pairing URL is redacted from all output. One named SKIP line
+      # when no built orca/, no built PowerBrowser, or an installed Orca exists.
+      "orca-slotless-start|node $REPO_ROOT/scripts/verify-orca-slotless-start.mjs"
+      # NEW (61-02, BRW-01, P61-04): orca-browser-parity, re-run on every Orca re-pin. Full
+      # tier: needs the fetched orca/. Derived at check time: every browser.* RPC name under
+      # orca/src/main/runtime/rpc/methods (test files excluded), the automation method list,
+      # the provider members, the CLI specs, and the components that use each ability.
+      # Compared both ways with the rows of
+      # .planning/spikes/005-orca-browser-parity/DISPOSITIONS.md: red on an ability with no
+      # row, a row with no ability, a users cell that differs from the derived set, an empty
+      # derivation or a moved constant, or a disposition outside the five. Prints one SKIP
+      # line when no fetched orca/ exists.
+      "orca-browser-parity|node $REPO_ROOT/scripts/orca-browser-parity.mjs"
+      # NEW (62-01, OVL-05, P62-20): orca-overlay-built. Each PB-added file under orca-overlay/files
+      # carries the literal pb-overlay:<its Orca-root path>, which must be in a .js file under
+      # orca/out/web or orca/out/orcad (node_modules never counts). Passes as vacuous at zero files.
+      "orca-overlay-built|node $REPO_ROOT/scripts/verify-orca-overlay.mjs --built"
+      # NEW (62-02, RUN-03/RUN-04/RUN-05, P62-14/P62-18): the two live proofs of OrcaService. Full tier.
+      # orca-hidden-electron runs one built orcad twice against an ELF decoy at ~/.local/bin/orca-ide in a scratch
+      # HOME: stock first (both orcad-emitted detectors must fire, else "detector blind"), then with OrcaEnv's switch
+      # (both must stay absent). orca-service-live launches PowerBrowser three times on one profile: orcad's
+      # /proc environ names equal the expected set after a planted ORCA_PLANT_62 is proven to reach PowerBrowser;
+      # a quit ends orcad, the terminal daemon and a real agent session; a SIGKILLed PowerBrowser's orcad is reaped
+      # by the next launch on the same port. Run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock.
+      # Each prints one named SKIP line when no built orca/ or no built PowerBrowser exists.
+      "orca-hidden-electron|node $REPO_ROOT/scripts/verify-orca-hidden-electron.mjs"
+      "orca-service-live|node $REPO_ROOT/scripts/verify-orca-service-live.mjs"
+      # NEW (63-03, TERM-02/EXT-02, P63-15/P63-26): orca-agent-hooks. One built orcad with a scratch HOME and data
+      # root (the user's ~/.orca and ~/.claude are never touched). Orca's own managed Claude hook script runs on
+      # synthetic events derived from the pinned source; the wrapper is launched exactly as the Claude Code
+      # extension would launch it, with a stub claude. No model turn. A named SKIP when orca/ or orca-agents is
+      # not built.
+      "orca-agent-hooks|node $REPO_ROOT/scripts/verify-orca-agent-hooks.mjs"
+      # orca-agent-status-live: a real claude through agent launch in a launched PowerBrowser; working, waiting and
+      # done, the agent PTY under Orca's terminal daemon, the bridge-folder files, agents ended on quit. One prompt,
+      # at most two model turns, on the owner's login; Claude session records compared before and after, never with
+      # a constant. Run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock. SKIP when not built.
+      "orca-agent-status-live|node $REPO_ROOT/scripts/verify-orca-agent-status-live.mjs"
+      # NEW (68-03, OVL-03, P68-16/P68-27): the pin lag against the stock Android app and Orca's own evaluateCompat
+      # verdict (network read): the newest mobile-android-v* tag's constants by a one-blob partial clone against the
+      # pin's; red on a refusing verdict (a re-pin is due). A printed SKIP when orca/ is not fetched.
+      "orca-mobile-skew|node $REPO_ROOT/scripts/verify-orca-mobile-protocol.mjs --skew"
+      # NEW (68-04, PLAT-01, P68-25, P68-38): orca-licence-rulings is red while an owner licence item is open (68-B permissive set; the 68-A terms check for the SDK extension). Needs no built orca/.
+      # The coordinator keys its GATE_KNOWN_OPEN_EXCLUSIONS row to the WINDOWS.md entry for those items; release.yml's guard runs the same mode.
+      "orca-licence-rulings|node $REPO_ROOT/scripts/verify-licence-allowlist.mjs --rulings"
+      # NEW (68-01, PLAT-01, P68-06): orca-packaged-tree over the container-built Linux tarball's orca/ (target
+      # linux-x64, manifest orca/out/orcad-prebuilds/manifest.json). FAILs naming the container build until 68-06
+      # builds the tarball; release.yml's build-linux runs it among its packaged labels.
+      "orca-packaged-tree|node $REPO_ROOT/scripts/verify-orca-packaged-tree.mjs"
+      # orca-packaged-live: the container-built package runs orcad on its own Node from <GreD>/orca, pairs, and a quit
+      # ends it. Runs under flock /home/chris/coding/Power-Browser/.git/pb-live.lock in 68-06; FAILs without the tarball.
+      "orca-packaged-live|node $REPO_ROOT/scripts/verify-orca-packaged-live.mjs"
+      # NEW (68-07, BEXT-01, P68-38): orca-claude-sdk-built. ORCAD_EXTERNAL_MODULES lists the Claude agent SDK (seam 080)
+      # and no file under orca/out carries its version needle, proven present in the installed sdk.mjs first.
+      "orca-claude-sdk-built|node $REPO_ROOT/scripts/verify-orca-claude-sdk.mjs --built"
+      # NEW (68-09, BEXT-01, P68-38): bundled-extensions-live. The built backend's list-extensions on a fresh config dir
+      # lists the extension as a user plugin, not a built-in; removing its directory sticks across a restart. No browser.
+      "bundled-extensions-live|node $REPO_ROOT/scripts/verify-bundled-extensions.mjs --live"
+      # NEW (64-01, TAB-04/TAB-06/TERM-01, P64-25/P64-32): orca-pane-entry, the pane bundle's build gate (tracked
+      # status at the pre-build baseline, no React copy after the standalone detector moved, Orca's React major.minor
+      # equal to Theia's when Theia is installed, nothing newly inlined, entry imports and C3 exports; clause l, owner
+      # rulings 2026-11-17: no bundle module calls Orca's document-wide useAppShellServices, usePrimarySelectionPaste,
+      # useLargeTextControlPaste or useAppSessionPersistence; the entry's pane-scoped and veto-free copies match Orca's
+      # calls and listener types; every document or window listener the services root installs, derived through its
+      # hooks' calls, is classified in APP_WIDE_LISTENERS both ways, so a re-pin's new one is red). SKIP when
+      # the bundle is not built. orca-pane-standalone-live: the bundle on a standalone page in a PowerBrowser web
+      # tab with a scratch orcad; the isolated per-leaf terminal mount (P64-32) is measured first, then every
+      # hosted type mounts after the planted throwing child registers. The live row runs under the live lock (the
+      # driver takes it; by hand, `flock <git common dir>/pb-live.lock node <row>` is valid: that flock is the row's
+      # ancestor, the contract's ancestor case), with every inherited ORCA_* unset; SKIP when not built. Phase 68's
+      # re-pin job runs both rows.
+      "orca-pane-entry|node $REPO_ROOT/scripts/verify-orca-pane-entry.mjs"
+      "orca-pane-standalone-live|node $REPO_ROOT/scripts/verify-orca-pane-standalone-live.mjs"
+      # orca-pane-css: the built pane sheet against Theia's built frontend CSS (keyframe names disjoint, no root
+      # custom property read by Theia, every other rule scoped). orca-pane-css-live: the scoped sheet in the Theia
+      # document, both directions, controls first, the portal probe and the derived <html> clause; lane-build mode
+      # only while theia/extensions/orca-panes is absent, real-widget mode when it exists. P64-15 makes the
+      # coordinator run orca-pane-css-live first on the merged tree in real-widget mode, before any widget live row
+      # is judged. Live: under the live lock (taken by the driver; `flock <git common dir>/pb-live.lock node <row>` by
+      # hand is the contract's ancestor case), every inherited ORCA_* unset.
+      "orca-pane-css|node $REPO_ROOT/scripts/verify-orca-pane-css.mjs"
+      "orca-pane-css-live|node $REPO_ROOT/scripts/verify-orca-pane-css-live.mjs"
+      # NEW (64-04, TERM-04, P64-33; D-32 since 64-06): orca-terminal-keys-live. One session: the in-session control
+      # in a t<n> terminal and a web tab judged by D-32 (shell keys to the shell, switch keys switch tabs with no PTY
+      # bytes, ctrl+shift+w closes t<n>); stage 2 in a hosted Orca terminal (shell keys reach the PTY, switch keys
+      # switch and reach no PTY once the PTY read is proven, the close key requests Orca's close; a named SKIP only
+      # while theia/extensions/orca-panes is absent); stage 2b (owner rulings 2026-11-17): Orca's switch reads on at
+      # PowerBrowser's default on Linux, a hosted terminal's selection pastes there once on a middle-click, a Theia editable
+      # gets the system selection throughout, and after the user turns the switch off in Orca's hosted Settings it stays
+      # off and the terminal pastes nothing; stage 2c: with Orca's checkpoint failing the Theia browser's leave check still
+      # permits, 100 KiB pastes reach Theia's editor and quick input as Gecko pastes them, and after an activation in Orca's
+      # worktree palette keys typed in a Theia editor or a web tab reach no Orca terminal; stage 2d (owner ruling 2026-11-17,
+      # "Fix now"): an Orca terminal the CLI creates and shows beside a Theia editor, and one a restored layout shows there,
+      # take none of the keys typed in the editor nor its focus; a tab click and New Orca Terminal give the terminal keyboard
+      # focus and its keys; then the control repeated. Run under
+      # flock /home/chris/coding/Power-Browser/.git/pb-live.lock with ORCA_* unset.
+      "orca-terminal-keys-live|node $REPO_ROOT/scripts/verify-orca-terminal-keys-live.mjs"
+      # orca-tabs-live (64-04, TAB-01..TAB-06/TERM-01, criteria 2, 3, 6): every creation path gives one hosted tab
+      # within 1 s, echo, per-leaf split placement, chat from PB and from a second paired client, the other Orca-only
+      # views, Orca tab groups as Lumino splits, the A4 freeze guard, Organising rows, no Orca tab chrome after its
+      # detector, close semantics, reload, route and offer containment. Coordinator proof on the merged, wired, built
+      # tree after orca-pane-css-live (P64-15); a named SKIP while lane p64-02 or p64-01 is unmerged. Under the live lock.
+      "orca-tabs-live|node $REPO_ROOT/scripts/verify-orca-tabs-live.mjs"
+      # NEW (65-02, TAB-05, P65-05/P65-27): orca-workspace-live. Drivers: the built CLI (file open, open-changed, repo add,
+      # worktree create and rm) and the bundle's check-only openPane for branch, commit, combined and conflict opens;
+      # positive control: the Monaco root selector matched in a Theia editor before its absence in Orca pane roots.
+      # Coordinator-run on the merged tree after orca-pane-css-live, under the live lock with ORCA_* unset.
+      "orca-workspace-live|node $REPO_ROOT/scripts/verify-orca-workspace-live.mjs"
+      # NEW (65-03, TAB-07/TAB-09, P65-24/P65-27): orca-side-panel-live, Orca's sidebar, Settings, Agents and right
+      # sidebar in the Orca mode's two view containers (clauses a-m: docking, rows vs the CLI lists, a settings
+      # round-trip, the Agents part, worktree activation, page tabs, no leak into Coding or Browsing, registry, egress
+      # after a planted .invalid control resolution; j, 2026-11-18: each part's node and Orca surface fill the part
+      # body, from no project on; k, 2026-11-18: no Theia status bar in the Orca mode, its row reclaimed, Coding the
+      # control; l, 2026-11-18: Orca's right-sidebar close button and its RightSidebarToggle at the main area's top
+      # right collapse and reopen the Theia right panel with Orca's content, as Theia's Toggle Right Panel does;
+      # m, 2026-11-19: each side keeps its width through web tabs and a Browsing and an Organising round trip, BiDi
+      # pointer drags from across Orca's grab band resize it, and a squeeze stops at Orca's minimum from its source).
+      # orca-add-project-live: Orca's Add-project and remove, the stock
+      # standalone page first as the control, then PowerBrowser's side panel. Both under the live lock.
+      "orca-side-panel-live|node $REPO_ROOT/scripts/verify-orca-side-panel-live.mjs"
+      "orca-add-project-live|node $REPO_ROOT/scripts/verify-orca-add-project-live.mjs"
+      # NEW (65-04, TAB-08, criterion 4; P65-23/P65-31): orca-offer-scan pairs, writes the marker, opens a hosted chat,
+      # saves a Setup, quits and scans the profile for that launch's offer. orca-relaunch-restore-live saves Orca and
+      # Coding tabs in a Setup, quits, relaunches, restores and compares dock, modes, names, echo, devices and the scan;
+      # paste-choice ("Remember my 'off'"): the user's off of Orca's Middle-click Paste from Selection, set in launch 1 on a
+      # fresh profile that read on, reads off after the relaunch and a terminal selection pastes nothing until it is on again.
+      # Coordinator proof on the merged tree (p65-01, p65-02, p65-04); under the live lock with ORCA_* unset.
+      "orca-offer-scan|node $REPO_ROOT/scripts/verify-orca-offer-scan.mjs"
+      "orca-relaunch-restore-live|node $REPO_ROOT/scripts/verify-orca-relaunch-restore-live.mjs"
+      # NEW (66-01, BRW-03, P66-02/P66-30): orca-browser-host-bundle. The served directory from the pane config's outDir;
+      # pb-browser-host.js imported in Node and attached to a scratch orcad with the offer held in memory: CLI tab create
+      # is one createPage, goto is answered, the user close (browser.tabClose) drops the page. Needs the Orca build and
+      # CLI; run under the live lock with ORCA_* unset; a named SKIP when the bundle, orcad or the CLI is absent.
+      "orca-browser-host-bundle|node $REPO_ROOT/scripts/verify-orca-browser-host-bundle.mjs"
+      # NEW (66-03, BRW-03, P66-28, D-11): no-remote-agent-port-live launches the built binary twice headless (a control
+      # with --remote-debugging-port=0, then as shipped) and requires every listening TCP socket of the shipped process
+      # tree to be the sidecar's, orcad's or the tab-store endpoint's port, read from the profile at run time, after the
+      # control proved the detector sees the Remote Agent. The self-test plants verdict faults, then runs the control
+      # alone, which must go red naming the Remote Agent's socket. Both under the live lock with ORCA_* unset.
+      "no-remote-agent-port-live|node $REPO_ROOT/scripts/verify-no-remote-agent-port-live.mjs"
+      "no-remote-agent-port-live-self-test|node $REPO_ROOT/scripts/verify-no-remote-agent-port-live.mjs --self-test"
+      # NEW (66-04, BRW-03, P66-16/A5): orca-browser-snapshot-live drives the Orca CLI against PowerBrowser's orcad on
+      # each fixture page and compares the agent child's snapshot with the pinned agent-browser's reference output
+      # structurally: line grammar, ref'd (role, name) multiset, level/checked/expanded/selected tokens, the --delta
+      # kind after the page's scripted change, ref survival, click @eN on the named node and browser_stale_ref for a
+      # removed node. Coordinator proof on the merged tree (p66-01..p66-04); under the live lock with ORCA_* unset.
+      "orca-browser-snapshot-live|node $REPO_ROOT/scripts/verify-orca-browser-snapshot-live.mjs"
+      # NEW (66-05, BRW-02/BRW-03/BRW-04, P66-30): orca-browser-agent-live and orca-agent-mark-live prove ROADMAP Phase
+      # 66 criteria 1-3 through the Orca CLI against PB's orcad: one background agent web tab per tab create within 1 s,
+      # goto/click/type/screenshot at DPR 1 and 2, parked focus, refusals, the agent container, the decoy (P66-29), the
+      # renderer path, user close, reload, P66-09 activation, the no-Orca-pane create and 66-08's (n) agent opens (D-35:
+      # a user tab's window.open and link target adopt as tabs first, then an agent page's create none) (criteria 1-2); the mark, its
+      # idle clear, Stop and an unmarked stock window (criterion 3). Every absence follows its detector's positive read.
+      # Coordinator-run on the merged, built tree under flock /home/chris/coding/Power-Browser/.git/pb-live.lock with
+      # ORCA_* unset; a named SKIP without lane p66-03's AGENT_METHODS, lane p66-02's extension, a built PowerBrowser or
+      # lane p66-01's built host bundle.
+      "orca-browser-agent-live|node $REPO_ROOT/scripts/verify-orca-browser-agent-live.mjs"
+      "orca-agent-mark-live|node $REPO_ROOT/scripts/verify-orca-agent-mark-live.mjs"
+      # NEW (67-01, RUN-09, P67-16..P67-20): orca-credential-store-live. Positive control first: the built orcad run
+      # through scripts/lib/orca-run.mjs on a temporary data root reports the pinned disposable-profile string; then PB on
+      # a normal profile reports a pinned host-key string and the /proc walker finds orcad before steps 3 and 4 judge its
+      # absence for a temporary profile and the plaintext override. flock /home/chris/coding/Power-Browser/.git/pb-live.lock,
+      # ORCA_* unset; HOME is a per-run scratch folder (ruling 2026-11-15, live-scratch-home), never the real ~/.orca.
+      "orca-credential-store-live|node $REPO_ROOT/scripts/verify-orca-credential-store-live.mjs"
+      # NEW (67-03, RUN-06, P67-01, P67-29, A-7): orca-failure-page-live induces restarting (kill -9 of orcad),
+      # port-in-use (a listener on the Orca port, relaunch), pairing-lost twice (orca-devices.json without the hosted
+      # client's keyed rows, the offer row kept so Reconnect recovers, then a SIGSTOP past the client's liveness; and
+      # the offer file at 0644) and browser-not-attached (the host bundle moved aside), with a positive control of each
+      # hosted pane's own content before every induction. Under flock .git/pb-live.lock with ORCA_* unset.
+      "orca-failure-page-live|node $REPO_ROOT/scripts/verify-orca-failure-page-live.mjs"
+      # NEW (67-04, RUN-07, P67-10/P67-11, P67-21): orca-pairing-containment-live pairs, opens a marker web tab and a
+      # hosted chat tab, reads the diagnostics layer, every address text and tab-address copy, saves a Setup, captures
+      # stdout/stderr, quits, then runs every collector over the profile, the bridge folder and the captured text; each
+      # control (marker URL, ready line, Orca port row, the offer in web-pairing, an orcad LISTEN row) is found first.
+      # Coordinator-run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock, ORCA_* unset; profiles under
+      # .mozbuild/pb-live-profiles/ (makeProfile and firefox-bidi defaults; dispose removes the alias and bridge folder).
+      "orca-pairing-containment-live|node $REPO_ROOT/scripts/verify-orca-pairing-containment.mjs"
+      # NEW (67-05, INJ-01, P67-22..P67-27): orca-landing-logo-live. Proxy control first (Orca's own logo on a second
+      # port), pairing through the connect form's field only, the PB mark and alt on orcad's origin in a web tab and a
+      # stock window, none in the Theia document after the same query found it in the orcad page, the mark again after
+      # Landing remounts, and gh's call count recorded through a stub. Under flock .git/pb-live.lock with ORCA_* unset.
+      "orca-landing-logo-live|node $REPO_ROOT/scripts/verify-orca-landing-logo-live.mjs"
+      # NEW (68-08, BEXT-02, P68-39): bundled-xpi-packaged. The extracted Linux package's distribution/extensions/
+      # holds exactly the pinned XPIs as <id>.xpi, each byte-equal to its pin. FAILs naming the package build without it.
+      "bundled-xpi-packaged|node $REPO_ROOT/scripts/verify-bundled-xpi.mjs --packaged"
+      # bundled-xpi-live: the packaged binary on one fresh profile, three launches: installed from the distribution
+      # directory, enabled and blocking a loopback request matched by a rule derived from the XPI's own default-on list;
+      # still filtering after a relaunch with zero stock windows; disabled lets it through; removed stays removed after a
+      # relaunch. Run under flock /home/chris/coding/Power-Browser/.git/pb-live.lock. --live --dev runs on the dev objdir.
+      "bundled-xpi-live|node $REPO_ROOT/scripts/verify-bundled-xpi.mjs --live"
+      # bundled-xpi-live-dev: the same three launches on the dev objdir, so the uBlock Origin blocking assertion runs in
+      # every gate while bundled-xpi-live's exclusion (no release package, WINDOWS 30) stands (audit harness-driver-05).
+      "bundled-xpi-live-dev|node $REPO_ROOT/scripts/verify-bundled-xpi.mjs --live --dev"
+      # NEW (audit-fix integration, 2026-11-21): orcad-lifecycle's self-test, 27 planted faults over real stand-in
+      # processes, about two minutes, so not --quick. The check itself is a quick row.
+      "orcad-lifecycle-self-test|node $REPO_ROOT/scripts/verify-orcad-lifecycle.mjs --self-test"
+      # The two slowest self-tests of the audit-fix checks (about 30 s and 70 s) are full-tier for the same reason: with
+      # them the quick tier no longer fitted the 480 s limit of the stop hook that runs it. Their checks are quick rows.
+      "agent-tab-walls-self-test|node $REPO_ROOT/scripts/verify-agent-tab-walls.mjs --self-test"
+      "claude-wrapper-pane-self-test|node $REPO_ROOT/scripts/verify-claude-wrapper-pane.mjs --self-test"
+      # NEW (59-07prep; full tier since audit harness-driver-06, 59-CR-03): the D-09 re-date tool's self-test. On a
+      # synthetic ledger built with gsd-core's own constructors (two open, one fixed, one waived; 59-WR-04) it proves
+      # the dry run writes nothing, that a fixed, waived or unknown id is refused before anything is written, and that
+      # the real run changes only the named entries' reason through gsd-core's own WINDOWS.md parser, so gsd-tools
+      # still parses the result. That parser lives in the developer's home, not this tree, so the row is not --quick;
+      # without it the self-test is a named SKIP (exit 77) and the tool a FAIL. The tool itself runs only with the date
+      # Chris names.
+      "redate-windows-self-test|node $REPO_ROOT/scripts/redate-windows.mjs --self-test"
+      # NEW (68-05, OVL-06, P68-19/P68-37): orca-upstream-prs is red until the owner records an upstream PR URL for each D-27
+      # class (browser-provider; D-45 ruled web-entry out) in its seams.json rows' upstream.pr. The coordinator keys its
+      # GATE_KNOWN_OPEN_EXCLUSIONS row to the upstream-PRs WINDOWS.md entry. Reads seams.json only; no network.
+      "orca-upstream-prs|node $REPO_ROOT/scripts/verify-orca-overlay.mjs --upstream-prs"
     )
+  fi
+
+  # Which rows are full tier (they run under the live lock): every row the QUICK=0 block appended.
+  local -A FULL_TIER=()
+  local i
+  for ((i = quick_rows; i < ${#CHECKS[@]}; i++)); do FULL_TIER["${CHECKS[i]%%|*}"]=1; done
+  # Fixture mode: the self-test's registry replaces the real one (header). "full" rows run only without --quick.
+  if [ -n "$FIXTURE_REGISTRY" ]; then
+    CHECKS=()
+    FULL_TIER=()
+    local fixture_line fixture_tier fixture_row
+    while IFS= read -r fixture_line || [ -n "$fixture_line" ]; do
+      case "$fixture_line" in ''|'#'*) continue ;; esac
+      fixture_tier="${fixture_line%%|*}"
+      fixture_row="${fixture_line#*|}"
+      case "$fixture_tier" in
+        quick) CHECKS+=("$fixture_row") ;;
+        full) if [ "$QUICK" -eq 0 ]; then CHECKS+=("$fixture_row"); FULL_TIER["${fixture_row%%|*}"]=1; fi ;;
+        *) echo "verify-platform: FAIL -- fixture registry line has tier '$fixture_tier', want quick or full: $fixture_line" >&2; return 1 ;;
+      esac
+    done < "$FIXTURE_REGISTRY"
   fi
 
   # A --quick run with an empty registry would print "all checks passed" having
@@ -6407,11 +7174,22 @@ run_own_checks() {
 
   local FAILED=0
   local -a SUMMARY=()
+  local -a SKIPPED=()
+  # Each row's wall time in ms, "ms label", for the slowest-rows block (the quick tier must fit the stop hook's
+  # 480 s; review point 10).
+  local -a TIMINGS=()
+  local row_t0
 
   for entry in "${CHECKS[@]}"; do
     local label="${entry%%|*}"
     local cmd="${entry#*|}"
     echo "verify-platform: running $label..."
+    row_t0="${EPOCHREALTIME/[.,]/}"
+    if [ -n "${FULL_TIER[$label]:-}" ] && ! acquire_live_lock; then
+      SUMMARY+=("$label: FAIL")
+      FAILED=1
+      continue
+    fi
     # External bash/node script invocations get their own process group via
     # setsid, so an interrupt's group-kill in cleanup() can reach whatever they
     # background (verify-endpoints.sh's own powerbrowser child, two layers
@@ -6420,15 +7198,7 @@ run_own_checks() {
     # whatever it spawns (start_shell/start_backend already do).
     case "$cmd" in
       bash\ */*|node\ */*)
-        setsid $cmd &
-        CURRENT_CHECK_PID=$!
-        if wait "$CURRENT_CHECK_PID"; then
-          SUMMARY+=("$label: PASS")
-        else
-          SUMMARY+=("$label: FAIL")
-          FAILED=1
-        fi
-        CURRENT_CHECK_PID=""
+        run_script_row "$label" "$cmd"
         ;;
       *)
         # Every entry reaching this branch must be a bare, argument-free shell
@@ -6436,17 +7206,25 @@ run_own_checks() {
         # statically-known function name). A future entry that needs arguments
         # must add a wrapper function, not smuggle a command string here --
         # guarded loudly rather than silently mis-invoked.
+        ROW_VERDICT=FAIL
+        ROW_REASON=""
         if [[ "$cmd" == *[[:space:]]* ]]; then
           echo "verify-platform: FAIL -- check '$label' has a non-function-name command ('$cmd'); add a wrapper function instead" >&2
-          SUMMARY+=("$label: FAIL")
-          FAILED=1
-        elif "$cmd"; then
-          SUMMARY+=("$label: PASS")
         else
-          SUMMARY+=("$label: FAIL")
-          FAILED=1
+          local fn_rc=0
+          "$cmd" || fn_rc=$?
+          # A function row's output is not captured, so only its status can say SKIP (SKIP-PROTOCOL.md).
+          if [ "$fn_rc" -eq 0 ]; then ROW_VERDICT=PASS
+          elif [ "$fn_rc" -eq "$SKIP_EXIT" ]; then ROW_VERDICT=SKIP; ROW_REASON="function row returned $SKIP_EXIT"
+          fi
         fi
         ;;
+    esac
+    SUMMARY+=("$label: $ROW_VERDICT")
+    TIMINGS+=("$(( (${EPOCHREALTIME/[.,]/} - row_t0) / 1000 )) $label")
+    case "$ROW_VERDICT" in
+      FAIL) FAILED=1 ;;
+      SKIP) SKIPPED+=("$label -- $ROW_REASON") ;;
     esac
   done
 
@@ -6455,13 +7233,265 @@ run_own_checks() {
   for line in "${SUMMARY[@]}"; do
     echo "  $line"
   done
+  if [ "${#SKIPPED[@]}" -gt 0 ]; then
+    echo "verify-platform: skipped (each asserted nothing; --gate fails on a SKIP no open ledger exclusion excuses)"
+    for line in "${SKIPPED[@]}"; do
+      echo "    $line"
+    done
+  fi
+  echo "verify-platform: slowest rows (seconds)"
+  printf '%s\n' "${TIMINGS[@]}" | sort -rn | head -n 20 | awk '{ printf "    %7.1f %s\n", $1 / 1000, $2 }'
 
-  if [ "$FAILED" -eq 0 ]; then
-    echo "verify-platform: PASS -- all checks passed"
+  if [ "$FAILED" -eq 0 ] && [ "${#SKIPPED[@]}" -eq 0 ]; then
+    echo "verify-platform: ${FIXTURE_WORD}PASS -- all checks passed"
+    return 0
+  elif [ "$FAILED" -eq 0 ]; then
+    echo "verify-platform: ${FIXTURE_WORD}PASS -- every check that ran passed; ${#SKIPPED[@]} SKIPPED (listed above, not run)"
     return 0
   else
-    echo "verify-platform: FAIL -- see summary above" >&2
+    echo "verify-platform: ${FIXTURE_WORD}FAIL -- see summary above" >&2
     return 1
+  fi
+}
+
+# Fixture-only function row (verify-platform-driver.mjs --self-test): a function row that returns 77.
+check_fixture_function_skip() {
+  echo "fixture function row: SKIP -- planted"
+  return "$SKIP_EXIT"
+}
+
+# One script row: run it in its own session with its output teed to ROW_LOG_DIR, then decide PASS, FAIL or
+# SKIP into ROW_VERDICT and ROW_REASON (SKIP-PROTOCOL.md). Exit 0 is PASS unless the last stdout line is a
+# SKIP line (a script not yet converted to exit 77); exit 77 is SKIP and must print a SKIP line; any other
+# status is FAIL. The leak leg can turn any verdict into FAIL.
+# The live lock (audit harness-live-tabs-14). Every live row's header asks to run under flock on
+# <git common dir>/pb-live.lock, so two sessions never run live rows at once; nothing took it. The driver now
+# takes it before its first full-tier row and holds it to the end of the run, through a holder process of its
+# own (flock -o, so no row inherits the lock's descriptor). The handshake with the rows is the live-lock contract
+# in SKIP-PROTOCOL.md ("The live lock"): the driver exports PB_LIVE_LOCK_HELD=1 and PB_LIVE_LOCK_HOLDER=<pid>:<start
+# ticks> of the process /proc/locks shows holding the lock, and it never trusts an inherited PB_LIVE_LOCK_HELD. It
+# goes on without taking the lock only when /proc/locks shows the lock held by the process an inherited
+# PB_LIVE_LOCK_HOLDER names, with matching start ticks, or by one of its own ancestors (`flock <lock>
+# scripts/verify-platform.sh`). An inherited PB_LIVE_LOCK_HELD=1 or PB_LIVE_LOCK_HOLDER with neither is a FAIL.
+live_lock_path() {
+  if [ -n "$FIXTURE_REGISTRY" ] && [ -n "${PB_VERIFY_FIXTURE_LOCK:-}" ]; then
+    echo "$PB_VERIFY_FIXTURE_LOCK"
+    return 0
+  fi
+  local common
+  common="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  echo "$common/pb-live.lock"
+}
+# The device /proc/locks prints for file $1, as "maj:min" in its own form (two-digit lowercase hex each). It is the
+# device of the superblock, from /proc/self/mountinfo (the longest mount point containing the file's real path), not
+# stat's st_dev: btrfs reports a per-subvolume st_dev (48 for /home here) while /proc/locks prints the superblock's
+# (00:22), so st_dev would never match.
+lock_file_dev() {
+  local path dev
+  path="$(realpath -- "$1" 2>/dev/null)" || return 1
+  dev="$(awk -v p="$path" '{ mp = $5; gsub(/\\040/, " ", mp); pre = (mp == "/") ? "/" : mp "/"; if ((p == mp || index(p, pre) == 1) && length(mp) >= best) { best = length(mp); dev = $3 } } END { print dev }' /proc/self/mountinfo 2>/dev/null)"
+  [[ "$dev" =~ ^([0-9]+):([0-9]+)$ ]] || return 1
+  printf '%02x:%02x\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+}
+# The pids /proc/locks shows holding a flock on file $1, matched by device AND inode (review of the live lock: an
+# inode number alone also matches a file with the same number on another filesystem), one per line. In fixture mode
+# PB_VERIFY_FIXTURE_PROC_LOCKS replaces /proc/locks with recorded text, so the self-test can plant a lock on another
+# device.
+lock_holders() {
+  local ino dev locks=/proc/locks
+  [ -n "$FIXTURE_REGISTRY" ] && [ -n "${PB_VERIFY_FIXTURE_PROC_LOCKS:-}" ] && locks="$PB_VERIFY_FIXTURE_PROC_LOCKS"
+  ino="$(stat -c %i -- "$1" 2>/dev/null)" || return 0
+  dev="$(lock_file_dev "$1")" || return 0
+  awk -v ino="$ino" -v dev="$dev" '$0 !~ /->/ && $2 == "FLOCK" { n = split($6, f, ":"); if (n == 3 && f[3] == ino && tolower(f[1] ":" f[2]) == dev) print $5 }' "$locks" 2>/dev/null
+}
+# True when a process holding a flock on $1 is this script or one of its ancestors; LOCK_ANCESTOR_PID names it.
+LOCK_ANCESTOR_PID=""
+lock_held_by_ancestor() {
+  local holders pid
+  LOCK_ANCESTOR_PID=""
+  holders="$(lock_holders "$1")"
+  [ -n "$holders" ] || return 1
+  pid=$$
+  while [ -n "$pid" ] && [ "$pid" -gt 1 ]; do
+    case " $(echo $holders) " in *" $pid "*) LOCK_ANCESTOR_PID="$pid"; return 0 ;; esac
+    pid="$(awk '{ sub(/^.*\) /, ""); print $2 }' "/proc/$pid/stat" 2>/dev/null)"
+  done
+  return 1
+}
+# True when $2 is "<pid>:<start ticks>" and /proc/locks shows that pid holding a flock on $1, with those start ticks
+# (so a reused pid number is not the holder it names).
+lock_held_by_named() {
+  local lock="$1" named="$2" pid ticks
+  [[ "$named" =~ ^([0-9]+):([0-9]+)$ ]] || return 1
+  pid="${BASH_REMATCH[1]}"
+  ticks="${BASH_REMATCH[2]}"
+  [ "$(start_ticks_of "$pid")" = "$ticks" ] || return 1
+  case " $(echo $(lock_holders "$lock")) " in *" $pid "*) return 0 ;; esac
+  return 1
+}
+# "pid (command)" for each holder of lock $1, for messages.
+describe_lock_holders() {
+  local pid out=""
+  for pid in $(lock_holders "$1"); do
+    out+=" pid $pid ($(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | cut -c1-160))"
+  done
+  echo "${out:- (no holder found in /proc/locks)}"
+}
+acquire_live_lock() {
+  [ "$LIVE_LOCK_STATE" -eq 1 ] && return 0
+  local lock
+  if ! lock="$(live_lock_path)" || ! : >> "$lock" 2>/dev/null; then
+    echo "verify-platform: FAIL -- the live lock file could not be opened (${lock:-no git common dir}); full-tier rows run only under it" >&2
+    return 1
+  fi
+  # The contract (SKIP-PROTOCOL.md, "The live lock"): an inherited variable is never proof; /proc/locks is.
+  if [ -n "${PB_LIVE_LOCK_HOLDER:-}" ] && lock_held_by_named "$lock" "$PB_LIVE_LOCK_HOLDER"; then
+    export PB_LIVE_LOCK_HELD=1
+    LIVE_LOCK_STATE=1
+    echo "verify-platform: live lock $lock held by the run that started this one (PB_LIVE_LOCK_HOLDER=$PB_LIVE_LOCK_HOLDER, confirmed in /proc/locks)"
+    return 0
+  fi
+  if lock_held_by_ancestor "$lock"; then
+    export PB_LIVE_LOCK_HELD=1
+    export PB_LIVE_LOCK_HOLDER="$LOCK_ANCESTOR_PID:$(start_ticks_of "$LOCK_ANCESTOR_PID")"
+    LIVE_LOCK_STATE=1
+    echo "verify-platform: live lock $lock held by a caller of this run (pid $LOCK_ANCESTOR_PID)"
+    return 0
+  fi
+  if [ "${PB_LIVE_LOCK_HELD:-}" = "1" ] || [ -n "${PB_LIVE_LOCK_HOLDER:-}" ]; then
+    echo "verify-platform: FAIL -- PB_LIVE_LOCK_HELD=${PB_LIVE_LOCK_HELD:-(unset)} and PB_LIVE_LOCK_HOLDER=${PB_LIVE_LOCK_HOLDER:-(unset)} are inherited, but /proc/locks shows the live lock $lock held neither by the process PB_LIVE_LOCK_HOLDER names (with its start ticks) nor by an ancestor of this run; it is held by:$(describe_lock_holders "$lock"). A variable cannot stand in for the lock. Next step: unset PB_LIVE_LOCK_HELD and PB_LIVE_LOCK_HOLDER and run again; the run then waits for the lock" >&2
+    return 1 # forged-lock-variable
+  fi
+  local ready="$ROW_LOG_DIR/live-lock-held" waited=0 since
+  # The holder lives only as long as this driver (review point 3): once it holds the lock it polls this
+  # driver's pid and start ticks every second and exits when either changes, which releases the lock even
+  # when the driver dies by SIGKILL or the out-of-memory killer and cleanup() never runs.
+  since="$(start_ticks_of $$)"
+  if [ -z "$since" ]; then
+    echo "verify-platform: FAIL -- this driver's start time could not be read from /proc/$$/stat, so a lock holder could not tell when the driver ends; the live lock is not taken" >&2
+    return 1
+  fi
+  setsid flock -o "$lock" bash -c '
+    echo held > "$1"
+    while [ "$(awk "{ sub(/^.*\\) /, \"\"); print \$20 }" "/proc/$2/stat" 2>/dev/null)" = "$3" ]; do sleep 1; done
+  ' _ "$ready" "$$" "$since" < /dev/null > /dev/null 2>&1 {IDLE_FD}>&- &
+  LIVE_LOCK_HOLDER_PID=$!
+  # The wait is bounded (PB_LIVE_LOCK_WAIT_S, default 6 h, longer than a full gate run) and names the holder.
+  local limit=$(( ${PB_LIVE_LOCK_WAIT_S:-21600} * 10 ))
+  until [ -e "$ready" ]; do
+    if ! kill -0 "$LIVE_LOCK_HOLDER_PID" 2>/dev/null; then
+      echo "verify-platform: FAIL -- flock on the live lock $lock ended without taking it" >&2
+      LIVE_LOCK_HOLDER_PID=""
+      return 1
+    fi
+    if [ "$waited" -eq 10 ] || [ "$waited" -ge "$limit" ]; then
+      local holders
+      holders="$(describe_lock_holders "$lock")"
+      if [ "$waited" -ge "$limit" ]; then
+        echo "verify-platform: FAIL -- the live lock $lock is still held after ${PB_LIVE_LOCK_WAIT_S:-21600} s by:$holders. Next step: wait for that run to end, or stop it" >&2
+        kill -- "-$LIVE_LOCK_HOLDER_PID" 2>/dev/null || true
+        wait "$LIVE_LOCK_HOLDER_PID" 2>/dev/null || true
+        LIVE_LOCK_HOLDER_PID=""
+        return 1
+      fi
+      echo "verify-platform: waiting for the live lock $lock, held by:$holders. Another live run holds it; this run waits until it ends (at most ${PB_LIVE_LOCK_WAIT_S:-21600} s). To find that run: ps -o pid,ppid,etime,args -p <pid>, then ps -o pid,args --ppid <pid>..."
+    fi
+    idle 0.1
+    waited=$((waited + 1))
+  done
+  export PB_LIVE_LOCK_HELD=1
+  export PB_LIVE_LOCK_HOLDER="$LIVE_LOCK_HOLDER_PID:$(start_ticks_of "$LIVE_LOCK_HOLDER_PID")"
+  LIVE_LOCK_STATE=1
+  echo "verify-platform: live lock $lock taken for the full-tier rows (holder pid $LIVE_LOCK_HOLDER_PID)"
+}
+
+# The start time of pid $1 in clock ticks since boot (/proc/<pid>/stat field 22); empty when it is gone.
+start_ticks_of() {
+  awk '{ sub(/^.*\) /, ""); print $20 }' "/proc/$1/stat" 2>/dev/null
+}
+
+ROW_SEQ=0
+ROW_VERDICT=""
+ROW_REASON=""
+# True when any process still carries row token $1 in its environment (/proc/<pid>/environ, NUL-separated).
+row_token_alive() {
+  [ -n "$1" ] && grep -qsxzF -- "PB_VERIFY_ROW_TOKEN=$1" /proc/[0-9]*/environ
+}
+run_script_row() {
+  local label="$1" cmd="$2"
+  ROW_SEQ=$((ROW_SEQ + 1))
+  local out="$ROW_LOG_DIR/$ROW_SEQ.out" err="$ROW_LOG_DIR/$ROW_SEQ.err"
+  local out_fd err_fd tee_out tee_err
+  exec {out_fd}> >(exec tee -- "$out"); tee_out=$!
+  exec {err_fd}> >(exec tee -- "$err" >&2); tee_err=$!
+  CURRENT_ROW_TOKEN="pbrow-$$-$ROW_SEQ-$RANDOM$RANDOM"
+  # shellcheck disable=SC2086 # $cmd is a registry command line and is split on purpose.
+  PB_VERIFY_ROW_TOKEN="$CURRENT_ROW_TOKEN" setsid $cmd >&"$out_fd" 2>&"$err_fd" {out_fd}>&- {err_fd}>&- {IDLE_FD}>&- &
+  CURRENT_CHECK_PID=$!
+  # The row leader's start ticks: the sweep takes no process older than the row (review point 7). Read at once; if
+  # the leader is already gone, this driver's own start (older than any row) is the bound.
+  CURRENT_ROW_SINCE="$(start_ticks_of "$CURRENT_CHECK_PID")"
+  [ -n "$CURRENT_ROW_SINCE" ] || CURRENT_ROW_SINCE="$(start_ticks_of $$)"
+  exec {out_fd}>&- {err_fd}>&-
+  local rc=0
+  wait "$CURRENT_CHECK_PID" || rc=$?
+  local leaked=0 survivors=0 leg_rc=0
+  # Leak leg: when anything of the row's process group outlives it (kill -0, a builtin, so a clean row costs no
+  # fork), or any process still carries the row's token (a detached orcad of scripts/lib/orca-run.mjs, which the
+  # group cannot reach; one grep), an orcad of the row is named, stopped and turns the row red (2026-11-16 gate,
+  # audit harness-driver-04). --sweep then stops every other survivor and names it on a NOTE line; that is red
+  # under --gate (audit harness-driver-07).
+  if kill -0 -- "-$CURRENT_CHECK_PID" 2>/dev/null || row_token_alive "$CURRENT_ROW_TOKEN"; then
+    node "$REPO_ROOT/scripts/verify-orcad-leak.mjs" --session "$CURRENT_CHECK_PID" --token "$CURRENT_ROW_TOKEN" --since "$CURRENT_ROW_SINCE" --label "$label" --sweep || leg_rc=$?
+  fi
+  case "$leg_rc" in
+    0) ;;
+    3) survivors=1 ;;
+    *) leaked=1 ;;
+  esac
+  CURRENT_CHECK_PID=""
+  CURRENT_ROW_TOKEN=""
+  # The tees end once every writer closed the pipe; a writer that outlived the row is bounded at 5 s.
+  local waited
+  for ((waited = 0; waited < 250; waited++)); do
+    kill -0 "$tee_out" 2>/dev/null || kill -0 "$tee_err" 2>/dev/null || break
+    idle 0.02
+  done
+  local tee_pid
+  for tee_pid in "$tee_out" "$tee_err"; do
+    kill -0 "$tee_pid" 2>/dev/null && kill "$tee_pid" 2>/dev/null
+  done
+
+  ROW_REASON=""
+  local last="" line
+  # `|| [ -n "$line" ]`: a last line with no trailing newline is still read (review point 1).
+  while IFS= read -r line || [ -n "$line" ]; do
+    [[ "$line" =~ [^[:space:]] ]] && last="$line"
+  done < <(tail -n 40 -- "$out" 2>/dev/null)
+  if [ "$leaked" -eq 1 ]; then
+    ROW_VERDICT=FAIL
+  elif [ "$survivors" -eq 1 ] && [ "$GATE" -eq 1 ]; then
+    echo "verify-platform: FAIL -- $label left processes running after it exited (the NOTE lines above name them); under --gate a row must clean up after itself" >&2
+    ROW_VERDICT=FAIL
+  elif [ "$rc" -eq 0 ]; then
+    if [[ "$last" =~ $SKIP_LINE_RE ]]; then
+      ROW_VERDICT=SKIP
+      ROW_REASON="${BASH_REMATCH[2]:-(no reason given)} [exit 0 with a SKIP last line: convert the script to exit $SKIP_EXIT]"
+    else
+      ROW_VERDICT=PASS
+    fi
+  elif [ "$rc" -eq "$SKIP_EXIT" ]; then
+    local skip_line
+    skip_line="$(grep -hE -- ': SKIP( -- .*)?$' "$out" "$err" 2>/dev/null | tail -n 1)"
+    if [[ "$skip_line" =~ $SKIP_LINE_RE ]]; then
+      ROW_VERDICT=SKIP
+      ROW_REASON="${BASH_REMATCH[2]:-(no reason given)}"
+    else
+      echo "verify-platform: FAIL -- $label exited $SKIP_EXIT (SKIP) without printing a '<name>: SKIP -- <reason>' line; a SKIP must say what did not run" >&2
+      ROW_VERDICT=FAIL
+    fi
+  else
+    ROW_VERDICT=FAIL
   fi
 }
 
@@ -6475,7 +7505,7 @@ run_own_checks() {
 # all, so a malformed/missing ledger can never be silently read as "open".
 ledger_entry_status() {
   local id="$1"
-  local windows_md="$REPO_ROOT/.planning/WINDOWS.md"
+  local windows_md="$WINDOWS_MD"
   node -e '
     const fs = require("fs");
     const path = process.argv[1];
@@ -6501,68 +7531,210 @@ ledger_entry_is_open() {
   [ "$status" = "open" ]
 }
 
-# Failing-check labels are read off this run's OWN printed summary lines
-# ("  <label>: FAIL") rather than by re-deriving or re-running anything.
+# Failing and skipped labels are read off this run's OWN printed summary lines
+# ("  <label>: FAIL", "  <label>: SKIP") rather than by re-deriving or re-running anything.
 extract_failed_labels() {
   grep -E '^  [A-Za-z0-9_.-]+: FAIL$' "$1" | sed -E 's/^  ([A-Za-z0-9_.-]+): FAIL$/\1/'
 }
+extract_skipped_labels() {
+  grep -E '^  [A-Za-z0-9_.-]+: SKIP$' "$1" | sed -E 's/^  ([A-Za-z0-9_.-]+): SKIP$/\1/'
+}
+
+# The lines a row printed in this run's log: from its "running <label>..." line to the next row or the summary.
+row_output() {
+  local log="$1" label="$2"
+  awk -v start="verify-platform: running $label..." '
+    $0 == start { on = 1; next }
+    on && (index($0, "verify-platform: running ") == 1 || $0 == "verify-platform: summary") { exit }
+    on { print }
+  ' "$log"
+}
+
+# A tally line that only counts the failures printed under or above it ("FAIL -- 3 problem(s) ...",
+# "FAIL -- see surface(s) above", "FAIL (3)"). Mode "only" lets these through uncovered.
+TALLY_LINE_RE='FAIL -- [0-9]+ [A-Za-z -]*\(s\)|FAIL -- see surface\(s\) above|FAIL \([0-9]+\)$'
+
+# Does exclusion <mode> <patterns> cover a row's output (stdin)? Patterns are " ;; "-separated literal
+# substrings. Every mode needs one output line containing a pattern: the failure the ledger entry describes
+# must be the one that happened. Then each mode names the lines that must each contain a pattern (a "judged"
+# line), so a second, different red in the same row stays red:
+#   only  every line containing FAIL that is not a tally line, and every item line under a tally line: the
+#         indented lines after "NAME: FAIL -- 3 failure(s):" up to the next unindented line, which carry the
+#         failures without the word FAIL (an item that starts with "Next step:" is guidance, not a failure).
+#   any   for self-test rows, whose planted faults print FAIL lines of their own: every line naming the
+#         self-test's own verdict (containing both "self-test" and FAIL) that is not a tally line. A control
+#         or plant the self-test itself reports as failed is judged; a planted fault's own red output is not.
+# Prints the first uncovered judged line on a miss.
+exclusion_covers() {
+  local mode="$1" patterns="$2"
+  local -a pats=()
+  local rest="$patterns"
+  while [ -n "$rest" ]; do
+    if [[ "$rest" == *" ;; "* ]]; then pats+=("${rest%% ;; *}"); rest="${rest#* ;; }"; else pats+=("$rest"); rest=""; fi
+  done
+  local line pat hit_any=0 uncovered="" covered judged in_items=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    covered=0
+    for pat in "${pats[@]}"; do
+      if [[ "$line" == *"$pat"* ]]; then covered=1; hit_any=1; break; fi
+    done
+    judged=0
+    if [[ "$line" =~ $TALLY_LINE_RE ]]; then
+      in_items=1
+    elif [[ "$line" =~ ^[[:space:]] ]] && [ "$in_items" -eq 1 ]; then
+      [ "$mode" = "only" ] && ! [[ "$line" =~ ^[[:space:]]+(-[[:space:]]+)?Next\ step: ]] && judged=1
+    else
+      in_items=0
+      if [[ "$line" == *FAIL* ]]; then
+        if [ "$mode" = "only" ]; then judged=1
+        elif [ "$mode" = "any" ] && [[ "$line" == *self-test* ]]; then judged=1
+        fi
+      fi
+    fi
+    if [ "$judged" -eq 1 ] && [ "$covered" -eq 0 ] && [ -z "$uncovered" ]; then
+      uncovered="$line"
+    fi
+  done
+  if [ "$hit_any" -eq 0 ]; then
+    echo "no output line contains: ${patterns}"
+    return 1
+  fi
+  if [ -n "$uncovered" ]; then
+    echo "a failure the exclusion does not describe: ${uncovered:0:300}"
+    return 1
+  fi
+  return 0
+}
 
 # The known-open exclusion list (D-127). Keyed on the broken-windows ledger id,
-# never on a bare assertion -- see ledger_entry_is_open above.
-# label|ledger_id|reason
+# never on a bare assertion -- see ledger_entry_is_open above -- AND on the output
+# the entry describes (audit harness-driver-05): a row is excused only while its
+# entry is open and its output shows the failure (or SKIP) that entry records.
+#
+# label|ledger_id|verdict|mode|patterns|reason
+#   verdict  FAIL or SKIP: the summary verdict this row excuses.
+#   mode     only: every FAIL line and every item line under a tally must be covered; any (self-test rows):
+#            every line of the self-test's own verdict that names a FAIL must be covered (exclusion_covers).
+#   patterns " ;; "-separated literal substrings of the row's output (exclusion_covers above).
+# The patterns were read off v1.7 gate run 5 (da97a4e9, .mozbuild/gate-run5/gate.log).
+REL_APP_INI="objdir-release/dist/bin/application.ini'"
+REL_NO_PKG=".en-US.linux-x86_64.tar.xz, found 0 -- run"
 declare -a GATE_KNOWN_OPEN_EXCLUSIONS=(
   # 39-19 (2026-11-07): every red of the v1.5 close-out full run that is not fixed is keyed to an open ledger
   # entry carrying repro, cause so far and source (scope item 7). The 01-era rows keyed to fixed ledger
   # entries 5 and 10 were removed: verify-endpoints and branding-variant-divergence pass, and
   # verify-branding-identity-release passes once objdir-release is rebuilt (39-19, docs/BUILD.md).
-  "ng063-packaged-launch|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "portable-elf|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "sidecar-no-symlinks|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "package-target-natives|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "packaged-identity|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "install-matrix|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "ng065-mar-signature-enforced|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "ng072-policies-packaged-webextension|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "search-engines-packaged|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "mar-update-hop|30|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
-  "ng074-ci-green-on-main|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
-  "repo-controls|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
-  "channel-live|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
-  "codeberg-mirror-live|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
-  "upptime-sweep-live|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
-  "win-matrix-record|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
-  "win-download-copy|31|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
-  "macos-package-payload|32|macOS deferred to v1.7 (R4), needs Mac hardware"
-  "macos-install-matrix|32|macOS deferred to v1.7 (R4), needs Mac hardware"
-  "tel06-error-delivery-live|33|refuses a dirty tree; the dirt is the owner's .claude/settings.json and .planning/state.json"
-  "verify-customize-inert|34|the customize.css layer shows no pixel effect in state 3; cause not isolated"
-  "ng089-uat-sheets|35|49 pending results in the v1.2/v1.3 UAT sheets; the NG-084 live pass was deferred by the owner"
-  "start-failure-shows-error|36|the readiness backstop fires before the planted settings-folder failure is classified"
-  "pan04-undo-close-group-live|37|after the commit focus is on a pb-org-new element the probe does not resolve; harness or product not separated"
-  "ng-023-suggestions-history-bookmarks|38|an open tab ranks below a bookmark match"
-  "prompts-live-self-test|39|plant allow-loads-frame-url goes red on popup adoption instead of its own failure, 2 of 3 runs"
-  "site-identity-live|40|app-menu: Organising rows 5-8 disabled and Help opens no about:support stock window"
-  "site-identity-live-self-test|40|app-menu: Organising rows 5-8 disabled and Help opens no about:support stock window"
-  "first-boot-surface-fresh|41|Theia core SideTabBar overflow reads a .theia-additional-views-menu the top side-panel tabs removed"
-  "ng067-frontend-errors-reach-telemetry|42|flaky: red 1 of 3 (no frontend.uncaught-error event sent)"
-  "page-furniture-live-self-test|43|flaky: clean control Copy Image Link clipboard read-back red 1 of 3"
-  "address-bar-live-self-test|25|plant ctrl-d-everywhere stays green on bookmark-keys"
-  "page-tools-live|28|flaky: crash-navigate red 1 of 3 registry runs (2026-11-06)"
-  "extension-actions-live|29|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
-  "extension-actions-live-self-test|29|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
+  # 59-07prep (2026-11-09): the rows keyed to entries 33, 34, 36, 37, 38, 39, 40, 41, 42 and 43 were
+  # removed after the Phase 59 gap-closure lanes (59-03, 59-08, 59-09) closed those entries; a row
+  # keyed to a fixed entry is dead weight because ledger_entry_is_open already stops excusing it.
+  # Every remaining row is keyed to an entry still open in .planning/WINDOWS.md; D-09 re-dates them
+  # in 59-07 without touching this list.
+  # Entry 30's rows are excused only while the release objdir or its package is absent: once a container
+  # tarball exists, any red in them (a MAR signature not enforced, a bundled XPI not blocking) is red.
+  "ng063-packaged-launch|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "portable-elf|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "sidecar-no-symlinks|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "package-target-natives|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "packaged-identity|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "install-matrix|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "ng065-mar-signature-enforced|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "ng072-policies-packaged-webextension|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "search-engines-packaged|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "mar-update-hop|30|FAIL|only|no MAR-hop proof evidence under .mozbuild/mar-hop: absent|no container-built release tarball and no N-plus-1 MAR hop record; deploy OWNER-PASS.md steps, not run"
+  "ng074-ci-green-on-main|31|FAIL|only|no verify.yml run exists for main at ;; has not completed ;; the verify.yml run for 2b5f4609f5c7d0238d0d928e6e116e4851154792 concluded failure|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "repo-controls|31|FAIL|only|is undeclared and its repository list ;; could not be read (gh: You must authenticate|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "channel-live|31|FAIL|only|found no published Release|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "codeberg-mirror-live|31|FAIL|only|the Codeberg mirror slug is not declared|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "upptime-sweep-live|31|FAIL|only|the Upptime status repository is not declared|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "win-matrix-record|31|FAIL|only|scripts/matrix/win-matrix-record.json is absent|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "win-download-copy|31|FAIL|only|scripts/matrix/win-matrix-record.json: is absent|live owner state not established (main unpushed, no Release, undeclared apps and mirror slugs, no Windows matrix record)"
+  "macos-package-payload|32|FAIL|only|.mozbuild/macos-package is absent|macOS deferred to v1.7 (R4), needs Mac hardware"
+  "macos-install-matrix|32|FAIL|only|FAIL -- 0 problem(s) and ;; [unobserved] |macOS deferred to v1.7 (R4), needs Mac hardware"
+  "ng089-uat-sheets|35|FAIL|only|: result pending ;; no recorded React 19 runtime test|49 pending results in the v1.2/v1.3 UAT sheets; the NG-084 live pass was deferred by the owner"
+  "address-bar-live-self-test|25|FAIL|any|'ctrl-d-everywhere' stayed green on bookmark-keys|plant ctrl-d-everywhere stays green on bookmark-keys"
+  "page-tools-live|28|FAIL|only|a URL sent to a crashed tab did not load it|flaky: crash-navigate red 1 of 3 registry runs (2026-11-06)"
+  "extension-actions-live|29|FAIL|only|private access rule not applied|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
+  "extension-actions-live-self-test|29|FAIL|only|private access rule not applied|private-access session 2: options page opens in the private stock window, matches stock; deferred to 999.17"
+  # 68-06 (2026-11-10)
+  "orca-packaged-tree|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball yet (68-06 Task 2 builds it)"
+  "orca-packaged-live|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no container-built release tarball yet (68-06 Task 2 builds it)"
+  # 68-06 (2026-11-11): Task 2 built the package from the dev objdir (no Safe Browsing key directory here), so
+  # the two rows above stay keyed to entry 30 until a container release tarball exists.
+  "orca-upstream-prs|51|FAIL|only|class browser-provider has no seams.json row with a non-null upstream pr|owner opens the upstream issues and PRs (OVL-06, D-27)"
+  # 2026-11-18 (D-60): the row takes a real screen capture and fails while another window has focus, which a
+  # 4.4 h gate on the owner's desktop cannot avoid (gate runs 4 and 5). It passed alone on 2026-11-18.
+  "real-input-gate-self-test|69|FAIL|any|clean-capture -> spectacle wrote no file|needs an unlocked desktop with no other window focused; run alone (PASS 2026-11-18)"
+  # 2026-11-23 (D-63): the row cannot run before a release exists.
+  "descriptor-monotonic|70|SKIP|only|zero published buildIDs: nothing to compare against|no published Release and no candidate descriptor yet"
+  # D-60 (2): the agent-status row's SKIP on a sign-in under 60 minutes from expiry stays counted, noted under
+  # WINDOWS 69; its alone PASS of 2026-11-18 is TERM-02's real-agent evidence. Any other SKIP of the row is red.
+  "orca-agent-status-live|69|SKIP|any|SKIP -- the Claude sign-in expires in|the Claude sign-in was under 60 minutes from expiry; the alone PASS of 2026-11-18 stands (D-60)"
+  # These five are not named in entry 30's description (audit harness-driver-05); each is excused only on its
+  # absent-release-build line. bundled-xpi-live-dev runs the blocking assertion on the dev objdir meanwhile.
+  "branding-variant-divergence|30|FAIL|only|objdir-release/dist/bin/browser/chrome/en-US/locale/branding/brand.properties does not exist|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
+  "verify-branding-identity-release|30|FAIL|only|objdir-release/dist/bin/application.ini does not exist ;; objdir-release/config.status does not exist ;; objdir-release/dist/bin/powerbrowser executable=false|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
+  "build-update-xml|30|FAIL|only|.mozbuild/mar-hop/nplus1.mar is absent|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
+  "bundled-xpi-packaged|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
+  "bundled-xpi-live|30|FAIL|only|$REL_APP_INI ;; $REL_NO_PKG|no release objdir (objdir-release) or N-plus-1 MAR in this worktree; the release build runs after the push"
 )
+if [ -n "$FIXTURE_REGISTRY" ]; then
+  GATE_KNOWN_OPEN_EXCLUSIONS=()
+  if [ -n "${PB_VERIFY_FIXTURE_EXCLUSIONS:-}" ]; then
+    while IFS= read -r fixture_excl || [ -n "$fixture_excl" ]; do
+      case "$fixture_excl" in ''|'#'*) continue ;; esac
+      GATE_KNOWN_OPEN_EXCLUSIONS+=("$fixture_excl")
+    done < "$PB_VERIFY_FIXTURE_EXCLUSIONS"
+  fi
+fi
+
+# Judges one FAIL or SKIP row of the gate log against GATE_KNOWN_OPEN_EXCLUSIONS. Prints one EXCLUDED or
+# FAIL line; returns 0 when the row is excused.
+gate_judge_row() {
+  local log="$1" label="$2" verdict="$3"
+  local excl_entry matched=0 why=""
+  for excl_entry in "${GATE_KNOWN_OPEN_EXCLUSIONS[@]}"; do
+    local excl_label="${excl_entry%%|*}" rest="${excl_entry#*|}"
+    [ "$excl_label" = "$label" ] || continue
+    local excl_ledger_id="${rest%%|*}"; rest="${rest#*|}"
+    local excl_verdict="${rest%%|*}"; rest="${rest#*|}"
+    local excl_mode="${rest%%|*}"; rest="${rest#*|}"
+    local excl_patterns="${rest%%|*}"
+    local excl_reason="${rest#*|}"
+    [ "$excl_verdict" = "$verdict" ] || continue
+    matched=1
+    if ! ledger_entry_is_open "$excl_ledger_id"; then
+      why="WINDOWS.md ledger entry $excl_ledger_id is no longer 'open' (fixed or waived); this check must be green now, not silently excused"
+      continue
+    fi
+    local miss
+    if ! miss="$(row_output "$log" "$label" | exclusion_covers "$excl_mode" "$excl_patterns")"; then
+      why="the exclusion keyed to WINDOWS.md ledger entry $excl_ledger_id does not cover this $verdict: $miss"
+      continue
+    fi
+    echo "  EXCLUDED (known-open): $label -- $verdict -- WINDOWS.md ledger entry $excl_ledger_id -- $excl_reason"
+    return 0
+  done
+  if [ "$matched" -eq 0 ] && [ "$verdict" = "SKIP" ]; then
+    echo "  FAIL (unexcused SKIP): $label -- the row did not run, so it asserted nothing; give it what it needs or key a SKIP exclusion to an open ledger entry" >&2
+  elif [ "$matched" -eq 0 ]; then
+    echo "  FAIL (not excluded): $label" >&2
+  else
+    echo "  FAIL (exclusion does not apply): $label -- $why" >&2
+  fi
+  return 1
+}
 
 # Before consolidation, --gate ran this script's own set and then SHELLED OUT to
 # verify-phase-04.sh and verify-phase-03.sh, parsing their summaries back. With
 # one registry there is nothing to shell out to: --gate is the full set in one
 # process, and the only thing it adds over a plain full run is the ledger-backed
-# exclusion pass over the failures. That is a simplification the consolidation
-# paid for, not a capability lost.
+# exclusion pass over the failures and the skips. That is a simplification the
+# consolidation paid for, not a capability lost.
 run_gate_mode() {
   local gate_start="$SECONDS"
   local commit
   commit="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo "unknown")"
-  echo "verify-platform: --gate -- commit $commit"
+  echo "verify-platform: ${FIXTURE_WORD}--gate -- commit $commit"
   echo "verify-platform: --gate -- proving every registered check is green (or a named, still-open ledger exclusion) at this one commit (D-127)"
   echo ""
 
@@ -6590,49 +7762,37 @@ run_gate_mode() {
 
   local gate_failed=0
   local excluded_count=0
-  if [ "$rc" -ne 0 ]; then
-    while IFS= read -r label; do
-      [ -z "$label" ] && continue
-      local excused=0
-      local matched_known_exclusion=0
-      local excl_entry
-      for excl_entry in "${GATE_KNOWN_OPEN_EXCLUSIONS[@]}"; do
-        local excl_label="${excl_entry%%|*}"
-        local rest="${excl_entry#*|}"
-        local excl_ledger_id="${rest%%|*}"
-        local excl_reason="${rest#*|}"
-        if [ "$label" = "$excl_label" ]; then
-          matched_known_exclusion=1
-          if ledger_entry_is_open "$excl_ledger_id"; then
-            echo "  EXCLUDED (known-open): $label -- WINDOWS.md ledger entry $excl_ledger_id -- $excl_reason"
-            excused=1
-            excluded_count=$((excluded_count + 1))
-          else
-            echo "  FAIL (exclusion no longer applies): $label -- WINDOWS.md ledger entry $excl_ledger_id is no longer 'open' (fixed or waived); this check must be green now, not silently excused" >&2
-            gate_failed=1
-          fi
-          break
-        fi
-      done
-      if [ "$excused" -ne 1 ] && [ "$matched_known_exclusion" -ne 1 ]; then
-        echo "  FAIL (not excluded): $label" >&2
-        gate_failed=1
-      fi
-    done < <(extract_failed_labels "$log")
+  local label
+  local -a failed_labels=() skipped_labels=()
+  mapfile -t failed_labels < <(extract_failed_labels "$log")
+  mapfile -t skipped_labels < <(extract_skipped_labels "$log")
+  # A failed run with no FAIL row in its summary (an empty registry, an unknown label, a driver error) is
+  # never a pass.
+  if [ "$rc" -ne 0 ] && [ "${#failed_labels[@]}" -eq 0 ]; then
+    echo "  FAIL (no summary): the check run exited $rc without a FAIL row in its summary; see the output above" >&2
+    gate_failed=1
   fi
+  for label in "${failed_labels[@]}"; do
+    [ -z "$label" ] && continue
+    if gate_judge_row "$log" "$label" FAIL; then excluded_count=$((excluded_count + 1)); else gate_failed=1; fi
+  done
+  for label in "${skipped_labels[@]}"; do
+    [ -z "$label" ] && continue
+    if gate_judge_row "$log" "$label" SKIP; then excluded_count=$((excluded_count + 1)); else gate_failed=1; fi
+  done
 
   local gate_elapsed=$((SECONDS - gate_start))
   echo ""
   echo "verify-platform: --gate -- total runtime ${gate_elapsed}s"
 
   if [ "$gate_failed" -eq 0 ] && [ "$excluded_count" -gt 0 ]; then
-    echo "verify-platform: --gate PASS-WITH-EXCLUSIONS -- commit $commit -- $excluded_count named known-open exclusion(s)"
+    echo "verify-platform: ${FIXTURE_WORD}--gate PASS-WITH-EXCLUSIONS -- commit $commit -- $excluded_count named known-open exclusion(s)"
     return 0
   elif [ "$gate_failed" -eq 0 ]; then
-    echo "verify-platform: --gate PASS -- commit $commit -- every registered check is green at this commit"
+    echo "verify-platform: ${FIXTURE_WORD}--gate PASS -- commit $commit -- every registered check ran and is green at this commit"
     return 0
   else
-    echo "verify-platform: --gate FAIL -- commit $commit -- see output above" >&2
+    echo "verify-platform: ${FIXTURE_WORD}--gate FAIL -- commit $commit -- see output above" >&2
     return 1
   fi
 }

@@ -106,3 +106,31 @@ Closing `scripts/verify-platform.sh --quick` on the committed tree (docs commit 
 - `docs/RELEASING.md` exists and carries the five records (anchors above).
 - Commit `2f0400ad` is an ancestor of HEAD.
 - This file exists and holds no key, secret or token.
+
+## Live state at parking (2026-11-07, recorded by Phase 59 plan 59-01)
+
+Source: `.planning/CARRY-FORWARD-v1.7.md` section 2, "Live state at parking", and its section 5.
+Chris did this work live on 2026-11-06/07. Plan 59-01 copied the record and redid nothing. The
+organisation is Deocracy.
+
+Done live:
+
+- The `powerbrowser-bot` App and its variables `BOT_APP_ID`, `BOT_APP_CLIENT_ID` and `OWNER_LOGIN`
+  (Task 2 step 7). The bot key is in environments bot, release and descriptor, and in
+  `powerbrowser-updates`.
+- The clock App, powerbrowser-clock (5633729), is installed (Task 2 step 2).
+- The scheduler repo `Deocracy/powerbrowser-scheduler`: scaffold and bundles, not deployed (Task 2
+  step 3).
+
+Parked, open:
+
+- The clock App private key, then the scheduler deploy with `CLOCK_PRIVATE_KEY` as PKCS#8 and the
+  dry-run train dispatch (Task 2 steps 4 and 5, and the dry run in step 7). The JWT-mint line in
+  RELEASING.md stays pending until the deployed Worker ticks.
+- The watchdog in `Deocracy/powerbrowser-updates` stays disabled until the clock ticks. After the
+  first tick: `gh workflow enable watchdog.yml -R Deocracy/powerbrowser-updates`.
+- The calendar exit test (Task 2 step 6) has no record. Its deferral is dated 2026-11-24
+  (CARRY-FORWARD section 5, from FINISH-PLAN section 5).
+
+This record does not change the plan's state: `status: partial` and `requirements-completed: []`
+stand.

@@ -40,14 +40,16 @@ const PROBES = `
     // The home pane's strip tabs, unfiltered: what the strip would paint with no group.
     const home = () => strip().mainTabs();
     // The expected strip, from membership reads only.
-    const derived = () => {
+    const paintedIds = () => Array.from(document.querySelectorAll('.pb-tab-strip .pb-tab:not(.pb-tab-stack)')).map(e => e.getAttribute('data-pb-tab'));
+    const derivedWidgets = () => {
         const m = A.model();
         const active = m.getActiveGroupId();
         const cur = current();
         const members = new Set(active ? m.getTabs(active).map(t => t.uri) : []);
         const loose = new Set(m.listUngrouped().map(t => t.uri));
-        return home().filter(w => w === cur || members.has(keyOf(w)) || loose.has(keyOf(w))).map(labelOf);
+        return home().filter(w => w === cur || members.has(keyOf(w)) || loose.has(keyOf(w)));
     };
+    const derived = () => derivedWidgets().map(labelOf);
     const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
     const settle = async (test, n) => { for (let i = 0; i < (n || 40) && !test(); i++) await A.sleep(125); return !!test(); };
     const stripMatches = async () => {
@@ -269,9 +271,14 @@ await runCheck(`verify-${NAME}`, async ({ pages, expect, failures }) => {
             const loadedMs = Date.now() - t0;
             const keys = ${JSON.stringify(first.keys)};
             const reopened = await settle(() => Object.values(keys).every(k => byKey(k)), 160);
-            const match = await stripMatches();
+            // A restored background tab is not loaded, so it reads its URL or 'New Tab', and several
+            // tabs can share a label (WINDOWS 56): after the relaunch the strip is compared by widget id.
+            const ids = await settle(() => same(paintedIds(), derivedWidgets().map(w => w.id)));
+            const match = { ok: ids, painted: painted(), derived: derived() };
+            const c = byKey(keys.c);
             return {
                 loaded, loadedMs, reopened,
+                cOpen: !!c && home().includes(c), cPainted: !!c && paintedIds().includes(c.id),
                 open: Object.values(keys).filter(k => byKey(k)),
                 organising: !!A.shell().getWidgetById('powerbrowser.modes.organising'),
                 mode: document.body.dataset.pbMode,
@@ -286,8 +293,8 @@ await runCheck(`verify-${NAME}`, async ({ pages, expect, failures }) => {
         expect(f.reopened, `(f) the restore did not reopen every test tab: open [${f.open.join(', ')}]`);
         expect(f.active === first.ga, `(f) after the relaunch the active group is ${f.active}, want A ${first.ga}`);
         expect(f.match.ok, `(f) the strip paints [${f.match.painted.join(' | ')}], want the derived set [${f.match.derived.join(' | ')}]`);
-        expect(f.home.includes(first.labelC) && !f.match.painted.includes(first.labelC),
-            `(f) the strip is not filtered: B's "${first.labelC}" is ${f.home.includes(first.labelC) ? 'painted' : 'not open'}`);
+        expect(f.cOpen && !f.cPainted,
+            `(f) the strip is not filtered: B's tab ${first.keys.c} is ${f.cOpen ? 'painted' : 'not open'}`);
         detail(`(f) relaunch: model loaded in ${f.loadedMs} ms with Organising never opened; A active; strip [${f.match.painted.join(' | ')}] of ${f.home.length} home tabs, B's tab filtered out`);
     });
     if (!failures.length) {

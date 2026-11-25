@@ -15,7 +15,7 @@
  * failure in the same session reuses the status-bar state without
  * re-showing the prompt; a success resets the flag.
  */
-import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
+import { inject, injectable } from '@theia/core/shared/inversify';
 import { Command, CommandContribution, CommandRegistry, CommandService, Disposable, MessageService } from '@theia/core/lib/common';
 import { FrontendApplication, FrontendApplicationContribution } from '@theia/core/lib/browser';
 import { StatusBar, StatusBarAlignment } from '@theia/core/lib/browser';
@@ -249,6 +249,14 @@ export class UpdateClientContribution implements FrontendApplicationContribution
         // The once-per-session flag is cleared by an observed completed check
         // in onAppUpdatePush, never here (CR-06).
         const reply = await this.request({ kind: 'checkForUpdates' });
+        // A check that finds no update sends no push, so a failed-check item would otherwise stay; a later error push restores it.
+        if (reply !== 'no-chrome' && reply.ok && !this.readyVersion) {
+            try {
+                await this.statusBar.removeElement(this.statusBarId);
+            } catch {
+                // Status bar unavailable: nothing to clear.
+            }
+        }
         if (reply !== 'no-chrome' && !reply.ok && reply.reason === 'not-started') {
             try {
                 const actions = await this.messages.warn(POWERBROWSER_UPDATE_COPY.checkNotStartedBody, POWERBROWSER_UPDATE_COPY.tryAgainLabel);
@@ -259,11 +267,6 @@ export class UpdateClientContribution implements FrontendApplicationContribution
                 // Message channel unavailable: nothing further to report through.
             }
         }
-    }
-
-    @postConstruct()
-    protected initRequestSeq(): void {
-        this.seq = 0;
     }
 
     protected request(msg: { kind: string }): Promise<ShellOutcome> {

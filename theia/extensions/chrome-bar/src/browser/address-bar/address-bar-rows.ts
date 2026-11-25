@@ -39,6 +39,13 @@ export const ENGINE_ROW_LIMIT = 4;
 export const PLACE_ROW_LIMIT = 5;
 export const ROW_LIMIT = 10;
 
+/**
+ * The most urls one placesFavicons request carries. Chrome's placesFavicons
+ * (PowerBrowserAPI.sys.mjs) reads only `urls.slice(0, 10)`, so this must not
+ * exceed 10: a url past chrome's cap gets no icon.
+ */
+export const FAVICON_REQUEST_LIMIT = 10;
+
 /** The longest icon URI a row may carry; the boundary applies the same cap. */
 const ICON_MAX_LENGTH = 65536;
 

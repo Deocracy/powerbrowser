@@ -1,8 +1,7 @@
 import * as React from '@theia/core/shared/react';
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import { ApplicationShell, ContextMenuRenderer, ReactWidget, Widget } from '@theia/core/lib/browser';
-import { CommandMenu, CommandRegistry, CompoundMenuNode, MenuPath } from '@theia/core/lib/common';
-import { DisposableCollection } from '@theia/core/lib/common/disposable';
+import { CommandMenu, CommandRegistry, CompoundMenuNode, Disposable, MenuPath } from '@theia/core/lib/common';
 import { Drag } from '@theia/core/shared/@lumino/dragdrop';
 import { MimeData } from '@theia/core/shared/@lumino/coreutils';
 import { Message } from '@theia/core/shared/@lumino/messaging';
@@ -230,8 +229,6 @@ export class TabStripWidget extends ReactWidget {
     /** TAB-07: the tab id of the page chrome last reported focused (the pageFocus push), for the focus rule. */
     protected focusedPageTabId: string | undefined;
 
-    protected readonly toDispose = new DisposableCollection();
-
     @postConstruct()
     protected init(): void {
         this.id = TabStripWidget.ID;
@@ -272,20 +269,21 @@ export class TabStripWidget extends ReactWidget {
         // TAB-05: pins come back after the launch restore, and the quit flush writes them with each tab's last URL.
         this.pinRestore = this.setups.sessionRestored.then(() => this.restorePins());
         this.toDispose.push(this.storage.onWillFlush(event => event.waitUntil(this.savePins())));
-        this.shell.mainPanel.onDidChangeCurrent(() => {
+        this.toDispose.push(this.shell.mainPanel.onDidChangeCurrent(() => {
             // TAB-07: a tab switch closes the preview; the switched-to tab takes focus, not the page the card hid.
             this.closePreview(false);
             this.update();
-        });
+        }));
         // A split moves a tab between panes without adding or removing it,
         // and which pane a tab is in is exactly what this strip now shows.
-        this.shell.mainPanel.layoutModified.connect(() => this.update());
+        const relayout = (): void => this.update();
+        this.shell.mainPanel.layoutModified.connect(relayout);
+        this.toDispose.push(Disposable.create(() => this.shell.mainPanel.layoutModified.disconnect(relayout)));
         this.update();
     }
 
     override dispose(): void {
         window.clearTimeout(this.previewTimer);
-        this.toDispose.dispose();
         super.dispose();
     }
 
@@ -366,6 +364,11 @@ export class TabStripWidget extends ReactWidget {
     };
 
     protected readonly onDragLeave = (event: Event): void => {
+        // Lumino sends the new element's lm-dragenter before the old one's lm-dragleave; only leaving the strip clears the ring.
+        const next = (event as Drag.Event).relatedTarget;
+        if (next instanceof Node && this.node.contains(next)) {
+            return;
+        }
         event.preventDefault();
         event.stopPropagation();
         this.removeClass('is-drop-target');
@@ -533,12 +536,13 @@ export class TabStripWidget extends ReactWidget {
     /** The stack's tabs, on screen or folded, in dock order. */
     protected stackWidgets(): Widget[] {
         if (this.collapsed) {
-            return this.collapsed.widgets.filter(widget => !widget.isDisposed);
+            // Folded tabs are detached; one with a parent again was dragged out of the folded stack and is free.
+            return this.collapsed.widgets.filter(widget => !widget.isDisposed && !widget.parent);
         }
-        const home = this.homeWidgets();
+        const home = new Set(this.homeWidgets());
         return [...this.shell.mainPanel.widgets()]
             .filter(widget => !TabStripWidget.MODE_SURFACES.includes(widget.id))
-            .filter(widget => !home.includes(widget) || this.stacked.has(widget));
+            .filter(widget => !home.has(widget) || this.stacked.has(widget));
     }
 
     protected activateTab(widget: Widget): void {
@@ -592,8 +596,9 @@ export class TabStripWidget extends ReactWidget {
             return;
         }
         this.collapsed = undefined;
+        const freed = new Set(folded.widgets.filter(widget => !widget.isDisposed && widget.parent));
         const kept = new Set<Widget>();
-        const layout = { main: folded.layout.main ? prune(folded.layout.main, kept) : null };
+        const layout = { main: folded.layout.main ? prune(folded.layout.main, kept, freed) : null };
         const extra = [...this.shell.mainPanel.widgets()].filter(widget => !kept.has(widget));
         this.shell.mainPanel.restoreLayout(layout);
         const bars = [...this.shell.mainPanel.tabBars()];
@@ -880,7 +885,7 @@ export class TabStripWidget extends ReactWidget {
 
     /** Every open main-area tab, including those folded into a collapsed stack (detached, not closed). */
     protected openTabs(): Widget[] {
-        const folded = this.collapsed?.widgets.filter(widget => !widget.isDisposed) ?? [];
+        const folded = this.collapsed?.widgets.filter(widget => !widget.isDisposed && !widget.parent) ?? [];
         return [...this.shell.mainPanel.widgets(), ...folded]
             .filter(widget => !TabStripWidget.MODE_SURFACES.includes(widget.id));
     }
@@ -1349,17 +1354,29 @@ export class TabStripWidget extends ReactWidget {
 
     /** A strip tab's node, by the widget id it is rendered with. */
     protected tabNode(widget: Widget): HTMLElement | undefined {
-        return Array.from(this.node.querySelectorAll<HTMLElement>('.pb-tab[data-pb-tab]'))
-            .find(node => node.dataset.pbTab === widget.id);
+        return this.tabNodes().get(widget.id);
+    }
+
+    /** Every strip tab's node by the widget id it is rendered with, from one query; the first node per id wins. */
+    protected tabNodes(): Map<string, HTMLElement> {
+        const nodes = new Map<string, HTMLElement>();
+        for (const node of Array.from(this.node.querySelectorAll<HTMLElement>('.pb-tab[data-pb-tab]'))) {
+            const id = node.dataset.pbTab!;
+            if (!nodes.has(id)) {
+                nodes.set(id, node);
+            }
+        }
+        return nodes;
     }
 
     /**
      * TAB-02 (D-05): the midpoint rule. The drop lands before the first strip tab whose horizontal midpoint is past
      * `x`; past every midpoint, it lands after the last tab (undefined).
      */
-    protected dropBefore(x: number): Widget | undefined {
-        return this.shownTabs().find(tab => {
-            const box = this.tabNode(tab)?.getBoundingClientRect();
+    protected dropBefore(x: number, tabs: Widget[] = this.shownTabs()): Widget | undefined {
+        const nodes = this.tabNodes();
+        return tabs.find(tab => {
+            const box = nodes.get(tab.id)?.getBoundingClientRect();
             return !!box && box.left + box.width / 2 > x;
         });
     }
@@ -1369,8 +1386,8 @@ export class TabStripWidget extends ReactWidget {
      * strip renders the pinned block first whatever the bar order is, so an unclamped drop would move the TabBar and
      * leave the strip as it was. Idempotent, so the aim, the drop and Move all share it.
      */
-    protected clampDrop(widget: Widget, before: Widget | undefined): Widget | undefined {
-        const firstLoose = this.shownTabs().find(tab => !this.isPinned(tab));
+    protected clampDrop(widget: Widget, before: Widget | undefined, tabs: Widget[] = this.shownTabs()): Widget | undefined {
+        const firstLoose = tabs.find(tab => !this.isPinned(tab));
         if (this.isPinned(widget)) {
             return before && this.isPinned(before) ? before : firstLoose;
         }
@@ -1379,8 +1396,9 @@ export class TabStripWidget extends ReactWidget {
 
     /** TAB-02: aims the in-flight reorder at the pointer and repaints the 2px drop indicator. */
     protected aimReorder(widget: Widget, x: number): void {
-        const before = this.clampDrop(widget, this.dropBefore(x));
+        // One strip read per pointer move (and per edge-scroll frame), shared by the aim, the clamp and the check below.
         const tabs = this.shownTabs();
+        const before = this.clampDrop(widget, this.dropBefore(x, tabs), tabs);
         const at = tabs.indexOf(widget);
         // Before itself or before its right neighbour, or after the last tab when it is the last: nowhere new.
         const moves = before ? before !== widget && tabs[at + 1] !== before : at !== tabs.length - 1;
@@ -1510,11 +1528,11 @@ export class TabStripWidget extends ReactWidget {
         // stacked tabs while the right pane showed none (2026-09-10).
         // Only this strip's two classes are toggled: Theia keeps its own
         // state (theia-mod-dirty, -pinned, -active) in the same string.
-        const home = this.homeWidgets();
+        const home = new Set(this.homeWidgets());
         for (const widget of this.shell.mainPanel.widgets()) {
             const kept = widget.title.className.split(' ')
                 .filter(c => c && c !== STRIP_ONLY_CLASS && c !== GROUP_CLOSING_CLASS);
-            if (home.includes(widget) && !this.stacked.has(widget)) {
+            if (home.has(widget) && !this.stacked.has(widget)) {
                 kept.push(STRIP_ONLY_CLASS);
             }
             if (this.groups.isClosingKey(this.groups.keyOf(widget))) {
@@ -1700,12 +1718,12 @@ export class TabStripWidget extends ReactWidget {
  * A saved dock arrangement minus the tabs closed since it was saved, with the
  * survivors collected. Restore would otherwise be handed disposed widgets.
  */
-function prune(area: DockPanel.ILayoutConfig['main'], kept: Set<Widget>): DockPanel.ILayoutConfig['main'] {
+function prune(area: DockPanel.ILayoutConfig['main'], kept: Set<Widget>, freed: ReadonlySet<Widget>): DockPanel.ILayoutConfig['main'] {
     if (!area) {
         return null;  // eslint-disable-line no-null/no-null
     }
     if (area.type === 'tab-area') {
-        const widgets = area.widgets.filter(widget => !widget.isDisposed);
+        const widgets = area.widgets.filter(widget => !widget.isDisposed && !freed.has(widget));
         if (!widgets.length) {
             return null;  // eslint-disable-line no-null/no-null
         }
@@ -1713,7 +1731,7 @@ function prune(area: DockPanel.ILayoutConfig['main'], kept: Set<Widget>): DockPa
         return { ...area, widgets, currentIndex: Math.min(area.currentIndex, widgets.length - 1) };
     }
     const pairs = area.children
-        .map((child, index) => ({ child: prune(child, kept), size: area.sizes[index] }))
+        .map((child, index) => ({ child: prune(child, kept, freed), size: area.sizes[index] }))
         .filter(pair => pair.child);
     if (!pairs.length) {
         return null;  // eslint-disable-line no-null/no-null

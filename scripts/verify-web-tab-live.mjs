@@ -79,7 +79,7 @@
  * WHAT IT DERIVES, never hand-keeps: factory id, empty-page URL, state event
  * name, the three class names and the DI binding line from web-tab.ts and
  * the frontend module; the New Tab command id and the pill input class from
- * chrome-bar-commands.ts; the shipped mode ids (exactly three), the activate
+ * chrome-bar-commands.ts; the shipped mode ids (organising third), the activate
  * command id and the organising widget id from the modes extension. A zero
  * derivation is a named FAIL (broken instrument), never a skip.
  *
@@ -262,8 +262,9 @@ function derive() {
     }
 
     const shipped = [...read(DESCRIPTORS_REL).matchAll(/^\s*id:\s*'([^']+)'/gm)].map(m => m[1]);
-    if (shipped.length !== 3) {
-        failures.push(`${DESCRIPTORS_REL}: derived ${shipped.length} shipped mode ids, expected exactly three (coding, browsing, organising) -- the walk cannot be built from a set of any other size`);
+    // P64-18 appended a fourth mode; the walk covers every shipped mode, and organising stays third (shipped[2]).
+    if (shipped.length < 3 || shipped[2] !== 'organising') {
+        failures.push(`${DESCRIPTORS_REL}: derived shipped mode ids ${JSON.stringify(shipped)}, expected at least three with organising third -- the walk and the organising assertion cannot be built`);
     }
     const activateCommandId = /MODES_ACTIVATE_COMMAND_ID\s*=\s*'([^']+)'/.exec(read(MODES_COMMANDS_REL))?.[1];
     if (!activateCommandId) {
@@ -273,9 +274,9 @@ function derive() {
     if (!organisingWidgetId) {
         failures.push(`${ORGANISING_REL}: derived NO organising widget id -- the one contracted main-area mutation on a switch cannot be excluded from the id sets`);
     }
-    // Chris's sequence, from the derived source order (Coding, Browsing,
-    // Organising): every mode is visited twice, so second visits are covered.
-    const walk = shipped.length === 3 ? [shipped[0], shipped[1], shipped[2], shipped[1], shipped[0]] : [];
+    // Chris's sequence, from the derived source order: out through every mode and back, so every mode
+    // but the last is visited twice (three modes: coding, browsing, organising, browsing, coding).
+    const walk = shipped.length >= 3 ? [...shipped, ...shipped.slice(0, -1).reverse()] : [];
 
     return {
         failures, factoryId, emptyUrl, stateEvent, requestEvent, blockingSelector, lostViewCopy,

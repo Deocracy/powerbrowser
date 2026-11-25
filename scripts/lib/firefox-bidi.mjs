@@ -21,11 +21,13 @@
 
 import { spawn } from 'node:child_process';
 import { appendFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
-import { existsSync, createWriteStream, readFileSync } from 'node:fs';
+import { existsSync, createWriteStream, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { aliasPathFor, bridgeDirFor, dataRootFor, nodePlatform } from '../../powerbrowser/shell/OrcaEnv.sys.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..');
@@ -43,12 +45,318 @@ const REPO_ROOT = join(__dirname, '..', '..');
 // checkout, because objdir/dist/bin symlinks into it.
 export const FIREFOX_BIN = process.env.PB_FIREFOX_BIN || join(REPO_ROOT, 'objdir', 'dist', 'bin', 'powerbrowser');
 
+// P67-21 as amended by A-6: PowerBrowser refuses Orca on a profile under a temp folder, so every live profile and
+// config home is a mkdtemp child of one repo-local, ignored base.
+export const LIVE_PROFILE_BASE = join(REPO_ROOT, '.mozbuild', 'pb-live-profiles');
+
+/** A new folder under LIVE_PROFILE_BASE, named `prefix` plus mkdtemp's suffix. */
+export async function liveProfileDir(prefix) {
+    await mkdir(LIVE_PROFILE_BASE, { recursive: true });
+    return mkdtemp(join(LIVE_PROFILE_BASE, prefix));
+}
+
+// Owner ruling 2026-11-15 ("Scratch HOME"): no live launch of PowerBrowser, orcad or the Orca CLI sees the developer's
+// real home, so orcad's ~/.orca (credential key, agent hooks), ~/.config/orca and the agent's ~/.claude edits land in
+// one per-run folder under LIVE_PROFILE_BASE, removed when this process exits. Every launch passes env: liveEnv(...);
+// live-scratch-home (scripts/verify-live-scratch-home.mjs) goes red on a launch that does not.
+/** The variables that decide where a launched process writes home data, with each one's default under HOME. */
+export const LIVE_HOME_VARS = Object.freeze({ HOME: '', XDG_CONFIG_HOME: '.config', XDG_DATA_HOME: '.local/share', XDG_STATE_HOME: '.local/state', XDG_CACHE_HOME: '.cache' });
+const HARNESS_SCRATCH = join(REPO_ROOT, '.mozbuild');
+const within = (p, root) => { const r = relative(root, p); return r === '' || (!r.startsWith('..') && !isAbsolute(r)); };
+/**
+ * The developer's real home folders: os.homedir() (HOME) and the passwd entry, which differ when the harness itself
+ * runs under a scratch HOME. Read once, when this module is first evaluated (the call below the function), so a row
+ * that later sets process.env.HOME to a scratch folder of its own (the agent row's decoy HOME) does not make that folder
+ * count as the real home and have liveEnv replace it (audit harness-live-security-01).
+ */
+let homesAtLoad = null;
+export function realHomes() {
+    if (homesAtLoad) return homesAtLoad;
+    let pw = '';
+    try { pw = userInfo().homedir; } catch { /* no passwd entry */ }
+    homesAtLoad = Object.freeze([...new Set([homedir(), pw].filter(Boolean).map(h => resolve(h)))]);
+    return homesAtLoad;
+}
+realHomes();
+/** True when `path` is unset, a real home or inside one, unless it is harness scratch under <repo>/.mozbuild. */
+export function inRealHome(path, homes = realHomes()) {
+    if (typeof path !== 'string' || path === '') return true;
+    const p = resolve(path);
+    return homes.some(h => within(p, h)) && !within(p, HARNESS_SCRATCH);
+}
+
+let scratchHome = null;
+/** The signals that end a live run: verify-platform.sh stops a check with SIGTERM to its group; Node runs no 'exit' listener on any of them. */
+export const LIVE_HOME_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP']);
+const HOME_PID_FILE = '.pid';
+const HOME_SEED_FILE = '.seeded'; // SHA-256 of the refresh token seedClaudeLogin wrote, never the token
+const sha256 = (s) => createHash('sha256').update(String(s)).digest('hex');
+const readJson = (f) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return {}; } };
+/** The real ~/.claude/.credentials.json (the first real home holding one), or null. */
+const realClaudeCredentials = () => realHomes().map(h => join(h, '.claude', '.credentials.json')).find(f => existsSync(f)) ?? null;
+
+/** True while the run that made scratch HOME `dir` is alive (its .pid). A folder with no .pid yet counts as alive for a minute. */
+function homeInUse(dir) {
+    let pid = 0;
+    try { pid = Number(readFileSync(join(dir, HOME_PID_FILE), 'utf8').trim()) || 0; } catch { /* no .pid */ }
+    if (!pid) { try { return Date.now() - statSync(dir).mtimeMs < 60000; } catch { return false; } }
+    try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+
+/**
+ * Writes refreshed sign-in `rotated` back into the real credentials file `realFile` when that file still holds the
+ * seeded refresh token (`seeded` is its SHA-256): a 0600 temp file with the file's other keys, renamed over it.
+ * Returns 'written', 'current' (the real file already holds `rotated`) or 'changed' (it holds another sign-in, or it
+ * could not be read or written). Audit harness-live-security-13: the owner's own claude writes the same file (a token
+ * refresh, an MCP server sign-in) without a lock, so the file is read again just before the rename, and a change since
+ * the first read restarts the merge from the new content instead of overwriting it. onTempWritten is a test hook.
+ */
+export function writeBackSignIn(realFile, rotated, seeded, onTempWritten = () => {}) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+        let bytes;
+        let real;
+        try { bytes = readFileSync(realFile, 'utf8'); real = JSON.parse(bytes); } catch { return 'changed'; }
+        const realToken = real.claudeAiOauth?.refreshToken;
+        if (realToken === rotated.refreshToken) return 'current';
+        if (seeded && realToken && sha256(realToken) === seeded) {
+            const tmp = `${realFile}.pb-${process.pid}.tmp`;
+            try {
+                rmSync(tmp, { force: true });
+                writeFileSync(tmp, JSON.stringify({ ...real, claudeAiOauth: rotated }), { mode: 0o600, flag: 'wx' });
+                onTempWritten();
+                if (readFileSync(realFile, 'utf8') !== bytes) { rmSync(tmp, { force: true }); continue; } // written meanwhile: merge again
+                renameSync(tmp, realFile);
+                return 'written';
+            } catch (e) {
+                rmSync(tmp, { force: true });
+                console.error(`firefox-bidi: could not write the refreshed sign-in back to ${realFile} (${e.code ?? 'error'})`);
+                return 'changed';
+            }
+        }
+        return 'changed';
+    }
+    return 'changed';
+}
+
+/**
+ * 68-11-REVIEW CR-02: true when scratch HOME `dir` holds no Claude sign-in that exists nowhere else. When claude rotated
+ * the seeded refresh token inside it, the rotated one is the only valid one, so it is written back to the real
+ * credentials file if that still holds the seeded token (compare-and-swap; a 0600 temp file renamed over it, the file's
+ * other keys kept). Otherwise the folder must be kept, and its path is printed with what to do. Never prints a token.
+ */
+function scratchSignInSettled(dir) {
+    const scratchFile = join(dir, '.claude', '.credentials.json');
+    const rotated = readJson(scratchFile).claudeAiOauth;
+    if (!rotated?.refreshToken) return true;
+    let seeded = '';
+    try { seeded = readFileSync(join(dir, HOME_SEED_FILE), 'utf8').trim(); } catch { /* seeded before .seeded existed */ }
+    if (sha256(rotated.refreshToken) === seeded) return true;
+    const realFile = realClaudeCredentials();
+    const outcome = realFile ? writeBackSignIn(realFile, rotated, seeded) : 'changed';
+    if (outcome === 'written') console.error(`firefox-bidi: claude refreshed its sign-in inside the scratch HOME; the new sign-in was written back to ${realFile}`);
+    if (outcome === 'written' || outcome === 'current') return true;
+    const target = realFile ?? '~/.claude/.credentials.json';
+    console.error(`firefox-bidi: FAIL -- claude refreshed its sign-in inside a scratch HOME, and it was not written back because ${target} changed during the run. The refreshed sign-in is kept in ${scratchFile}. If claude asks you to sign in again, replace the claudeAiOauth entry in ${target} with the one in that file; otherwise delete the folder ${dir}`);
+    return false;
+}
+
+/** Removes scratch HOME `dir` unless it holds the only copy of a refreshed Claude sign-in; returns whether it was removed. */
+function disposeHome(dir) {
+    if (!scratchSignInSettled(dir)) return false;
+    rmSync(dir, { recursive: true, force: true });
+    return true;
+}
+
+/**
+ * This run's scratch HOME (mode 0700, under LIVE_PROFILE_BASE): made on first use, removed when the process exits or a
+ * LIVE_HOME_SIGNALS signal ends it. SIGKILL cannot be caught, so making one first removes every pb-home-* folder whose
+ * run is no longer alive.
+ */
+export function liveHome() {
+    if (scratchHome) return scratchHome;
+    mkdirSync(LIVE_PROFILE_BASE, { recursive: true });
+    for (const name of readdirSync(LIVE_PROFILE_BASE)) {
+        const dir = join(LIVE_PROFILE_BASE, name);
+        if (name.startsWith('pb-home-') && !homeInUse(dir)) disposeHome(dir);
+    }
+    const home = mkdtempSync(join(LIVE_PROFILE_BASE, 'pb-home-'));
+    writeFileSync(join(home, HOME_PID_FILE), String(process.pid), { mode: 0o600 });
+    scratchHome = home;
+    process.once('exit', () => { if (!disposeHome(home)) process.exitCode = 1; });
+    for (const sig of LIVE_HOME_SIGNALS) {
+        const onSignal = () => {
+            // Another listener (withFirefoxPage's SIGINT) unwinds to a natural exit, which runs the 'exit' listener.
+            if (process.listenerCount(sig) > 1) return;
+            disposeHome(home);
+            process.off(sig, onSignal); // the default disposition again, so the re-raised signal ends the process
+            process.kill(process.pid, sig);
+        };
+        process.on(sig, onSignal);
+    }
+    return home;
+}
+
+/**
+ * A variable name that relocates a program's home data by convention (CLAUDE_CONFIG_DIR, CODEX_HOME, GEMINI_HOME,
+ * XDG_CONFIG_HOME, HOME): orcad and claude read CLAUDE_CONFIG_DIR before HOME (68-11-REVIEW WR-02).
+ */
+export const HOME_RELOCATING_NAME = /(^|_)(HOME|CONFIG_DIR|DATA_DIR|STATE_DIR|CACHE_DIR)$/;
+
+/**
+ * Throws unless HOME and every XDG base folder in `env` are set and outside the real home, and no other
+ * HOME_RELOCATING_NAME variable points inside it: the runtime half of the ruling.
+ */
+export function assertScratchHome(env, what = 'a live launch') {
+    const refuse = (name) => { throw new Error(`firefox-bidi: ${what} would run with ${name}=${env?.[name] || '(unset)'}, the developer's real home (owner ruling 2026-11-15, Scratch HOME)`); };
+    for (const name of Object.keys(LIVE_HOME_VARS)) if (inRealHome(env?.[name])) refuse(name);
+    for (const [name, value] of Object.entries(env ?? {})) if (HOME_RELOCATING_NAME.test(name) && value && inRealHome(value)) refuse(name);
+    return env;
+}
+
+/**
+ * `env` with HOME and the XDG base folders moved off the real home: HOME to liveHome(), an XDG folder to its default
+ * under that HOME. A value already outside the real home is kept (a row's own configHome, a check's own scratch HOME).
+ * Any other HOME_RELOCATING_NAME variable inside the real home (CLAUDE_CONFIG_DIR=~/.claude) is dropped, so the
+ * launched program falls back to the scratch HOME.
+ * XAUTHORITY is the one real-home file passed through, explicitly, so a headed run can still reach the X server.
+ */
+export function liveEnv(env = process.env) {
+    const out = { ...env };
+    if (inRealHome(out.HOME)) out.HOME = liveHome();
+    for (const [name, sub] of Object.entries(LIVE_HOME_VARS)) if (sub && inRealHome(out[name])) out[name] = join(out.HOME, sub);
+    for (const name of Object.keys(out)) if (!(name in LIVE_HOME_VARS) && HOME_RELOCATING_NAME.test(name) && out[name] && inRealHome(out[name])) delete out[name];
+    if (!out.XAUTHORITY) {
+        const xauth = realHomes().map(h => join(h, '.Xauthority')).find(f => existsSync(f));
+        if (xauth) out.XAUTHORITY = xauth;
+    }
+    return assertScratchHome(out);
+}
+
+/** Minutes of access-token life a real-agent run needs before it starts, so claude never refreshes inside the scratch HOME. */
+export const CLAUDE_TOKEN_MARGIN_MIN = 60;
+/** The ~/.claude.json keys a non-interactive claude needs to skip onboarding; folder trust is written by orcad itself. */
+export const CLAUDE_STATE_KEYS = Object.freeze(['hasCompletedOnboarding', 'lastOnboardingVersion', 'oauthAccount', 'userID']);
+
+/**
+ * Seeds liveHome() with exactly what the real claude needs to run non-interactively, for the rows that drive the
+ * owner's real agent (orca-tabs-live, orca-agent-status-live). Every file is written fresh, never linked or copied
+ * whole, so nothing the run writes (orcad's hooks in HOME/.claude/settings.json, session records) reaches ~/.claude:
+ *   .claude/.credentials.json  the claudeAiOauth sign-in only (no MCP server tokens, so no MCP refresh can happen)
+ *   .claude.json               CLAUDE_STATE_KEYS only (no mcpServers, no per-project state)
+ *   .claude/settings.json      skipDangerousModePermissionPrompt, mirrored from the real settings: orcad launches
+ *                              claude with --dangerously-skip-permissions, and without it claude stops at the
+ *                              Bypass Permissions confirmation, whose default is "No, exit"
+ * Token refresh: a refresh rotates the refresh token, and the rotated one would live only in the scratch copy, leaving
+ * the real sign-in with a spent token. So the run is refused unless the access token outlives CLAUDE_TOKEN_MARGIN_MIN,
+ * and the SHA-256 of the seeded refresh token is kept beside the copy (.seeded): whenever the scratch HOME is removed
+ * (exit, an ending signal, or the next run's sweep), a rotated token is written back or the folder kept
+ * (scratchSignInSettled). A second call in the same process keeps the first seed (68-11-REVIEW IN-04).
+ * Returns null when seeded, or the reason the row must not run.
+ */
+export function seedClaudeLogin() {
+    if (scratchHome && existsSync(join(scratchHome, HOME_SEED_FILE))) return null; // once per process: .seeded names the first seed
+    const realFile = realClaudeCredentials();
+    if (!realFile) return 'no Claude sign-in in the real home (~/.claude/.credentials.json); sign in to claude once, then re-run';
+    const real = dirname(dirname(realFile));
+    const oauth = readJson(realFile).claudeAiOauth;
+    if (!oauth?.refreshToken) return 'the Claude sign-in holds no claude.ai login (an API-key setup is not seeded); sign in to claude once, then re-run';
+    const minutesLeft = Math.floor((Number(oauth.expiresAt) - Date.now()) / 60000);
+    if (!(minutesLeft >= CLAUDE_TOKEN_MARGIN_MIN)) return `the Claude sign-in expires in ${Number.isFinite(minutesLeft) ? minutesLeft : '?'} min, under the ${CLAUDE_TOKEN_MARGIN_MIN} min a run needs without refreshing it in a scratch copy; use claude once so it refreshes its own sign-in, then re-run`;
+    const home = liveHome();
+    // 68-11-REVIEW WR-03: a launch keeps a HOME already outside the real home, and claude must find the seed in the HOME
+    // it gets. Only liveHome() is settled and removed (scratchSignInSettled), so the sign-in is never written elsewhere.
+    const launchHome = liveEnv().HOME;
+    if (launchHome !== home) return `this run's launches get HOME=${launchHome}, not the scratch HOME the sign-in is seeded into, so claude would not find it; run the row without a HOME of its own`;
+    const state = readJson(join(real, '.claude.json'));
+    const settings = readJson(join(real, '.claude', 'settings.json'));
+    mkdirSync(join(home, '.claude'), { recursive: true, mode: 0o700 });
+    const creds = join(home, '.claude', '.credentials.json');
+    writeFileSync(join(home, HOME_SEED_FILE), sha256(oauth.refreshToken), { mode: 0o600 });
+    writeFileSync(creds, JSON.stringify({ claudeAiOauth: oauth }), { mode: 0o600 });
+    writeFileSync(join(home, '.claude.json'), JSON.stringify(Object.fromEntries(CLAUDE_STATE_KEYS.filter(k => k in state).map(k => [k, state[k]]))), { mode: 0o600 });
+    writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify(settings.skipDangerousModePermissionPrompt === true ? { skipDangerousModePermissionPrompt: true } : {}), { mode: 0o600 });
+    return null;
+}
+
+/**
+ * Removes the data-root alias and the bridge folder OrcaEnv derives for `profileDir` (aliasPathFor, bridgeDirFor
+ * over dataRootFor), ignoring absent paths: with a repo-local profile every launch that starts orcad makes both
+ * (A-6, Pitfall 7). A removal error is logged, never thrown.
+ */
+export async function removeOrcaPathsFor(profileDir) {
+    // The HOME the launch had (aliasPathFor falls back to <HOME>/.cache). A process with no scratch HOME launched nothing
+    // through liveEnv(), so it gets none rather than making one just to compute a path (68-11-REVIEW IN-03).
+    const env = scratchHome || !inRealHome(process.env.HOME) ? liveEnv() : { ...process.env, HOME: '' };
+    const getEnv = name => env[name];
+    const dataRoot = dataRootFor(profileDir);
+    for (const path of [await aliasPathFor(dataRoot, getEnv), await bridgeDirFor(dataRoot, getEnv, nodePlatform(process.platform))]) {
+        if (!path) continue;
+        try {
+            await rm(path, { recursive: true, force: true }); // rm does not follow the alias link
+        } catch (err) {
+            console.error(`firefox-bidi: could not remove ${path} (${err.code ?? err.message})`);
+        }
+    }
+}
+
 // 39-REVIEW CR-01: the pids of the browsers withFirefoxPage launched that are still running. pb-kwin's real-input
 // gate accepts only a window one of them owns, so a PowerBrowser the owner has open never receives a send.
 const launchedPids = new Set();
 /** The pids of the browsers this process launched through withFirefoxPage that have not exited. */
 export function launchedBrowserPids() {
     return [...launchedPids];
+}
+
+// WINDOWS 54: a packaged row ends PowerBrowser with SIGTERM/SIGKILL, not a quit, so its OrcaService leaves orcad and
+// its terminal daemon running from the extraction root the row then deletes. Teardown stops them by recorded identity:
+// an argument under this run's own mkdtemp root, started no earlier than this run's browser, and pid plus start ticks
+// at signal time (signalIdentity). Never by name, so another session's orcad survives.
+
+/** The run's package extraction root when binPath lies under a <tmpdir>/pb-pkg-* folder (lib/built-tree.mjs extractPackage), else null. */
+export function extractionRootOf(binPath, tmp = tmpdir()) {
+    const rel = relative(resolve(tmp), resolve(binPath));
+    const first = rel.split(sep)[0];
+    if (!rel || isAbsolute(rel) || first === rel || !first.startsWith('pb-pkg-')) return null;
+    return join(resolve(tmp), first);
+}
+
+/** procs: [{ pid, argv, cwd, ticks }]. Those with an argument or working folder under root that started at or after `since` (start ticks; null: any). */
+export function strayUnder(root, procs, since = null) {
+    const under = (path) => typeof path === 'string' && path.startsWith(`${root}/`);
+    return procs.filter((p) => (p.argv.some(under) || under(p.cwd)) && (since === null || Number(p.ticks) >= Number(since)));
+}
+
+const argvOf = (pid) => { try { return readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean); } catch { return []; } };
+const cwdOf = (pid) => { try { return readlinkSync(`/proc/${pid}/cwd`); } catch { return ''; } };
+
+/** Stops every process strayUnder(root, <all processes>, since) names: SIGTERM, up to 10 s, then SIGKILL. Returns the count. */
+export async function stopStrays(root, { since = null, label = 'firefox-bidi' } = {}) {
+    const { startTicks, signalIdentity } = await import('../verify-orca-hidden-electron.mjs');
+    let names;
+    try { names = readdirSync('/proc'); } catch { return 0; }
+    const procs = names.filter((n) => /^\d+$/.test(n) && Number(n) !== process.pid)
+        .map((n) => ({ pid: Number(n), argv: argvOf(Number(n)), cwd: cwdOf(Number(n)), ticks: startTicks(Number(n)) })).filter((p) => p.ticks !== null);
+    const found = strayUnder(root, procs, since);
+    if (!found.length) return 0;
+    for (const p of found) signalIdentity(p.pid, p.ticks, 'SIGTERM');
+    const until = Date.now() + 10000;
+    while (Date.now() < until && found.some((p) => startTicks(p.pid) === p.ticks)) await new Promise((r) => setTimeout(r, 250));
+    for (const p of found) signalIdentity(p.pid, p.ticks, 'SIGKILL');
+    console.log(`${label}: stopped ${found.length} process(es) left running under ${root}`);
+    return found.length;
+}
+
+/**
+ * withFirefoxPage's teardown over the run's roots (its extraction root when packaged, and its profile): stopStrays
+ * for each, from the browser's start ticks. keepStrays (withFirefoxPage's named opt-out) stops nothing, for a row that
+ * judges what outlives the browser itself -- a quit's survivors, or an orphan the next launch must reap -- and then
+ * stops it; verify-platform.sh's leak leg (verify-orcad-leak.mjs) still judges that row after it exits.
+ */
+export async function stopRunStrays(roots, since, { keepStrays = false } = {}) {
+    if (keepStrays || since === null) return 0;
+    let stopped = 0;
+    for (const root of roots.filter(Boolean)) stopped += await stopStrays(root, { since });
+    return stopped;
 }
 
 /**
@@ -274,7 +582,7 @@ export async function captureScreenshot(url, outputPath, { windowSize = '800,600
         );
     }
 
-    const profileDir = await mkdtemp(join(tmpdir(), 'powerbrowser-firefox-bidi-'));
+    const profileDir = await liveProfileDir('powerbrowser-firefox-bidi-');
     await applyProfileOverrides(profileDir);
     let sigintHandler;
 
@@ -284,7 +592,7 @@ export async function captureScreenshot(url, outputPath, { windowSize = '800,600
         '--window-size', windowSize,
         '--screenshot', outputPath,
         url,
-    ], { stdio: ['ignore', 'ignore', 'pipe'] });
+    ], { env: liveEnv(), stdio: ['ignore', 'ignore', 'pipe'] });
 
     const cleanup = async () => {
         if (sigintHandler) process.off('SIGINT', sigintHandler);
@@ -299,6 +607,7 @@ export async function captureScreenshot(url, outputPath, { windowSize = '800,600
             });
         }
         await rm(profileDir, { recursive: true, force: true });
+        await removeOrcaPathsFor(profileDir);
     };
 
     sigintHandler = () => {
@@ -357,7 +666,11 @@ export async function captureScreenshot(url, outputPath, { windowSize = '800,600
  * settle past any debounce) before capturing -- the only way to actually
  * see the rendered app.
  */
-export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, stdoutPath, profileDir: keptProfileDir, capabilities = {} } = {}) {
+// PB_LIVE_STDOUT_PATH / PB_LIVE_STDERR_PATH (67-04): the default tee targets, for a caller that cannot pass them
+// through a wrapper (orca-pairing-containment captures PowerBrowser's output under Phase 65's withOrcaProfile).
+// keepStrays (2026-11-17, gate at 2788eb05): teardown leaves what outlives the browser running (stopRunStrays), for a
+// row that judges it and stops it itself; every other caller keeps the teardown's stop.
+export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, stdoutPath = process.env.PB_LIVE_STDOUT_PATH, stderrPath = process.env.PB_LIVE_STDERR_PATH, profileDir: keptProfileDir, capabilities = {}, keepStrays = false } = {}) {
     if (!existsSync(binPath)) {
         throw new Error(
             `firefox-bidi: ${binPath} does not exist. Run the Phase 1 Firefox build first ` +
@@ -369,7 +682,7 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
     // survives this launch, so a second withFirefoxPage call relaunches on it.
     // The caller creates and removes it; without it a temporary one is used.
     if (keptProfileDir) await mkdir(keptProfileDir, { recursive: true });
-    const profileDir = keptProfileDir || await mkdtemp(join(tmpdir(), 'powerbrowser-firefox-bidi-'));
+    const profileDir = keptProfileDir || await liveProfileDir('powerbrowser-firefox-bidi-');
     await applyProfileOverrides(profileDir);
     const port = await freePort();
 
@@ -390,6 +703,7 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
     // instance to get it would assert against a different process than the
     // one under test.
     const stdoutSink = stdoutPath ? createWriteStream(stdoutPath) : undefined;
+    const stderrSink = stderrPath ? createWriteStream(stderrPath) : undefined;
     // An EMPTY `url` means "launch with no URL argument at all", which is not
     // the same launch as `about:blank`. Found live (01-05): with GUI-01's
     // startup-window move landed, a URL on the command line opens a stock
@@ -412,13 +726,18 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
         '--remote-allow-hosts', '127.0.0.1',
         '--remote-allow-system-access',
         ...(url ? [url] : []),
-    ], { env, stdio: ['ignore', stdoutSink ? 'pipe' : 'ignore', 'pipe'] });
+    ], { env: liveEnv(env), stdio: ['ignore', stdoutSink ? 'pipe' : 'ignore', 'pipe'] });
     if (child.pid) {
         launchedPids.add(child.pid);
         child.once('exit', () => launchedPids.delete(child.pid));
     }
+    const pkgRoot = extractionRootOf(binPath);
+    const launchTicks = child.pid ? (await import('../verify-orca-hidden-electron.mjs')).startTicks(child.pid) : null;
     if (stdoutSink) {
         child.stdout.pipe(stdoutSink);
+    }
+    if (stderrSink) {
+        child.stderr.pipe(stderrSink);
     }
 
     let ws;
@@ -440,10 +759,20 @@ export async function withFirefoxPage(url, callback, { binPath = FIREFOX_BIN, st
                 child.once('exit', () => { clearTimeout(timer); resolve(); });
             });
         }
+        // The harness's SIGTERM kills PowerBrowser outright (it exits by the signal; no quit blocker runs), so OrcaService
+        // never stops orcad. orcad, its terminal daemon and the daemon's watcher work in <profile>/powerbrowser-orca (a dev
+        // run names only shared paths in argv), and a packaged run's also name its extraction root (WINDOWS 54).
+        await stopRunStrays([pkgRoot, profileDir], launchTicks, { keepStrays });
         if (stdoutSink) {
             await new Promise(resolve => stdoutSink.end(resolve));
         }
-        if (!keptProfileDir) await rm(profileDir, { recursive: true, force: true });
+        if (stderrSink) {
+            await new Promise(resolve => stderrSink.end(resolve));
+        }
+        if (!keptProfileDir) {
+            await rm(profileDir, { recursive: true, force: true });
+            await removeOrcaPathsFor(profileDir);
+        }
     };
 
     // CR-03: this handler must not call process.exit() itself. A caller

@@ -70,6 +70,17 @@
 // by exemption list -- a user-facing string added at a NEW site is the known
 // residual hole, stated here rather than silently assumed covered.
 //
+// 67-03 Orca hosting copy (RUN-06, P67-29). The hosted Orca views' failure page:
+// its sentences, protection line and button labels are derived by type-stripping
+// orca-panes' failure/orca-failure-copy.ts; each passes the shape test and names
+// PowerBrowser, each class's sentence names exactly the buttons it renders, the
+// copy and button tables share their keys, and the failure folder's components
+// carry no ad-hoc text. See checkOrcaCopy below.
+//
+// 68-11 reinstall copy. The bundled-extensions reinstall command's label and its
+// notifications, derived from bundled-extensions-copy.ts by the same type-strip
+// import; see checkBundledCopy below.
+//
 // Usage:
 //   node scripts/verify-shell-error-copy.mjs [--file <path>]
 //   node scripts/verify-shell-error-copy.mjs --self-test
@@ -78,11 +89,12 @@
 // into a temporary copy and requires each to go red naming the drift; a check
 // that can only go green is not a check.
 
-import { readFileSync, readdirSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import { stripTypeScriptTypes } from "node:module";
 import { resolveConfig } from "./generate.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
@@ -546,6 +558,9 @@ const EXPECTED_MODES_COPY = new Set([
   "PowerBrowser could not save this mode. Your panels are unchanged — try again.",
   'Mode "${name}" saved.',
   "PowerBrowser couldn't load the \"${name}\" mode. Browsing is shown instead.",
+  // theia-pane-hosting-04 (lane G3b): the status-bar notice when a custom mode takes the name a shipped mode now has. It reports
+  // a change already made (the renamed mode keeps its layout and is in the mode list); it is a notice, not an error.
+  'PowerBrowser now has its own "${name}" mode, so your "${name}" mode is now called "${name}".',
 ]);
 
 /**
@@ -603,6 +618,19 @@ const EXPECTED_NAV_COPY = new Set([
   "${name} is sharing your camera with this tab.",
   "${name} is sharing your microphone with this tab.",
   "${name} is sharing your screen with this tab.",
+  // Phase 66 (P66-23): the agent mark and its Stop button.
+  "Agent in control",
+  // agent-browser-04 (lane G1a): the mark shows on every agent tab; Stop stops every agent's tabs until Resume. Every
+  // "Select <X> to ..." sentence names a control the same object labels (checkNavCopy derives that).
+  "An Orca agent you started is controlling this tab in ${name}. Select Stop to stop every agent's tabs.",
+  "Agent tab",
+  "An Orca agent you started opened this tab in ${name}. Select Stop to stop every agent's tabs.",
+  "Stop",
+  "Stop every Orca agent's control of its tabs in ${name}, and stop agents opening new ones. The tabs stay open.",
+  "Agents stopped",
+  "You stopped Orca agents in ${name}. Select Resume to let them control their tabs again.",
+  "Resume",
+  "Let Orca agents control their tabs in ${name} again.",
   "${name} blocked a popup from this page.",
   "${name} blocked ${name} popups from this page.",
   "${name} stopped this page from sending you to another page.",
@@ -696,6 +724,7 @@ const EXPECTED_NAV_COPY = new Set([
   "There is a security problem with ${name}",
   "Local page on ${name}",
   "${name} can't show site information for this page. Try reloading the page.",
+  "Close site information",
   "Permissions",
   "No special permissions set for this site",
   "Allowed",
@@ -1094,11 +1123,19 @@ function checkNavCopy(src) {
       out.push(`nav copy: EXPECTED_NAV_COPY string is GONE (drifted or reworded copy): ${JSON.stringify(value)}`);
     }
   }
+  const labels = new Set(raw);
   for (const value of new Set(raw)) {
     if (value.includes(NAV_BRAND_LITERAL)) {
       out.push(`nav copy ${JSON.stringify(value)} spells the product name as a literal -- chrome-bar copy names the configured application name, interpolated`);
     }
     out.push(...leakFailures("nav copy", value));
+    // The next step is a real control: a sentence that says "Select <X> to ..." must name a label this object also defines
+    // (a button's text), so the step it gives is something on screen. Derived from the object, not listed here.
+    for (const m of value.matchAll(/\bSelect ([A-Z][A-Za-z]*(?: [A-Za-z]+)*?) to\b/g)) {
+      if (!labels.has(m[1])) {
+        out.push(`nav copy ${JSON.stringify(value)} tells the user to select "${m[1]}", which no CHROME_BAR_COPY label names -- the next step is not a control on screen`);
+      }
+    }
   }
   return out;
 }
@@ -1296,6 +1333,22 @@ const MODES_COPY_FAULTS = [
     expect: "${error.message}",
   },
   {
+    name: "a nav sentence tells the user to select a control that no label names",
+    apply: (sources) => ({
+      ...sources,
+      [NAV_COPY_REL]: sources[NAV_COPY_REL].replace("Select Resume to let them control", "Select Continue to let them control"),
+    }),
+    expect: 'tells the user to select "Continue"',
+  },
+  {
+    name: "an agent sentence names Stop after its label was renamed in the table",
+    apply: (sources) => ({
+      ...sources,
+      [NAV_COPY_REL]: sources[NAV_COPY_REL].replace("agentStopLabel: 'Stop',", "agentStopLabel: 'Halt',"),
+    }),
+    expect: 'tells the user to select "Stop"',
+  },
+  {
     name: "chrome-bar history sentence drifted",
     apply: (sources) => ({
       ...sources,
@@ -1335,6 +1388,400 @@ function runModesCopySelfTest() {
         `  FAIL  ${fault.name} -- planted fault did NOT go red naming ${JSON.stringify(fault.expect)}; ` +
           `got: ${found.join(" | ") || "(no failures at all)"}`
       );
+      allOk = false;
+    } else {
+      console.log(`  ok    ${fault.name} -- red, naming the drift`);
+    }
+  }
+  return allOk;
+}
+
+// ---------------------------------------------------------------------------
+// 67-03 Orca hosting copy (RUN-06, P67-02, P67-29, P67-30, P67-36). The PowerBrowser page a hosted Orca
+// view shows on failure takes every word from orca-panes' failure/orca-failure-copy.ts. Derived by type
+// stripping that file (node:module stripTypeScriptTypes) and importing it, then:
+//   - every class sentence and the protection sentence passes leakFailures and names PowerBrowser;
+//   - ORCA_FAILURE_COPY and ORCA_FAILURE_BUTTONS have the same keys, and every button id has a label;
+//   - for each class, the labels its sentence names (Restart Orca, Reconnect, Details as substrings)
+//     equal the labels of the buttons it renders (01-13: the stated step and the controls are one fact);
+//   - every render site under failure/ resolves to the tables: a JSX text node, a string-literal JSX
+//     child or a literal title/aria-label/placeholder/alt attribute in a .tsx there is red naming the file,
+//     and some .tsx there must index ORCA_FAILURE_COPY and ORCA_BUTTON_LABELS.
+// A zero derivation is red. The scope finds the failure-copy folder by what it holds, the file that exports
+// ORCA_FAILURE_COPY under any theia/extensions/*/src, so a moved folder is still checked; when no file exports it the scope
+// is RED, never a SKIP (harness-other-06): the orca-panes extension is in every tree of this branch, so its absence is drift.
+
+// Where the folder is today. Only the self-test plants below address it by name; the scope itself derives it.
+const ORCA_FAILURE_DIR_REL = "theia/extensions/orca-panes/src/browser/failure/";
+const ORCA_COPY_REL = `${ORCA_FAILURE_DIR_REL}orca-failure-copy.ts`;
+
+/** The folder (repo-relative, trailing slash) of the file that exports ORCA_FAILURE_COPY under root's theia/extensions/<name>/src, or null. */
+function findOrcaFailureDir(root) {
+  const extRoot = join(root, "theia", "extensions");
+  let exts;
+  try {
+    exts = readdirSync(extRoot, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+  } catch {
+    return null;
+  }
+  for (const ext of exts) {
+    let files;
+    try {
+      files = readdirSync(join(extRoot, ext, "src"), { recursive: true });
+    } catch {
+      continue;
+    }
+    for (const file of files.map(String).sort()) {
+      if (!/\.ts$/.test(file) || /\.(?:spec|test)\.ts$/.test(file)) continue;
+      let text;
+      try {
+        text = readFileSync(join(extRoot, ext, "src", file), "utf8");
+      } catch {
+        continue;
+      }
+      if (/export const ORCA_FAILURE_COPY\b/.test(text)) {
+        const folder = dirname(file);
+        return `theia/extensions/${ext}/src/${folder === "." ? "" : `${folder}/`}`;
+      }
+    }
+  }
+  return null;
+}
+
+/** rel -> source for every .ts/.tsx in the failure-copy folder, or null when no folder exports ORCA_FAILURE_COPY. */
+function readOrcaSources(root = REPO_ROOT) {
+  const dir = findOrcaFailureDir(root);
+  if (dir === null) return null;
+  const out = {};
+  for (const name of readdirSync(join(root, dir)).filter((n) => /\.tsx?$/.test(n)).sort()) {
+    out[`${dir}${name}`] = readFileSync(join(root, dir, name), "utf8");
+  }
+  return out;
+}
+
+const ORCA_ABSENT = "Orca copy: no file under theia/extensions/*/src exports ORCA_FAILURE_COPY, so the failure page's copy is not being checked -- the orca-panes extension or its failure-copy folder moved, was renamed or was deleted. Next step: restore it, or update this check if the Orca failure page was removed on purpose.";
+
+/** The whole Orca scope over root: the one function the main run and the self-test both call. */
+async function orcaScope(root = REPO_ROOT) {
+  const sources = readOrcaSources(root);
+  if (sources === null) return { failures: [ORCA_ABSENT], messages: 0, count: 0, dir: null };
+  const checked = await checkOrcaCopy(sources);
+  const copyRel = Object.keys(sources).find((rel) => /export const ORCA_FAILURE_COPY\b/.test(sources[rel]));
+  return { failures: checked.failures, messages: checked.messages, count: Object.keys(sources).length, dir: dirname(copyRel) };
+}
+
+async function loadOrcaCopy(src) {
+  return importStripped(src);
+}
+
+/** Type-strips a self-contained .ts copy table and imports it; { loadError } when that fails. */
+async function importStripped(src) {
+  const emit = process.emitWarning;
+  process.emitWarning = () => {}; // stripTypeScriptTypes is flagged experimental on Node 24
+  try {
+    const js = stripTypeScriptTypes(src);
+    return await import(`data:text/javascript;base64,${Buffer.from(js).toString("base64")}`);
+  } catch (err) {
+    return { loadError: err?.message ?? String(err) };
+  } finally {
+    process.emitWarning = emit;
+  }
+}
+
+/** @returns {{ failures: string[], messages: number }} */
+async function checkOrcaCopy(sources) {
+  const out = [];
+  const copyRel = Object.keys(sources).find((rel) => /export const ORCA_FAILURE_COPY\b/.test(sources[rel])) ?? ORCA_COPY_REL;
+  const mod = await loadOrcaCopy(sources[copyRel] ?? "");
+  const { ORCA_FAILURE_COPY: copy, ORCA_FAILURE_BUTTONS: buttons, ORCA_BUTTON_LABELS: labels, ORCA_PROTECTION_SENTENCE: protection } = mod;
+  if (mod.loadError || !copy || !buttons || !labels || typeof protection !== "string") {
+    out.push(`Orca copy: ${copyRel} did not yield ORCA_FAILURE_COPY, ORCA_FAILURE_BUTTONS, ORCA_BUTTON_LABELS and ORCA_PROTECTION_SENTENCE${mod.loadError ? ` (${mod.loadError})` : ""}`);
+    return { failures: out, messages: 0 };
+  }
+  const messages = Object.entries(copy).map(([cls, entry]) => [cls, entry?.message]);
+  if (messages.length === 0) {
+    out.push("Orca copy: derived ZERO strings from ORCA_FAILURE_COPY -- the comparison proves nothing");
+    return { failures: out, messages: 0 };
+  }
+  for (const [cls, message] of [...messages, ["protection sentence", protection]]) {
+    if (typeof message !== "string" || message.length === 0) {
+      out.push(`Orca copy: class '${cls}' has no message string`);
+      continue;
+    }
+    out.push(...leakFailures("Orca copy", message));
+    if (!message.includes("PowerBrowser")) out.push(`Orca copy: ${JSON.stringify(message)} (${cls}) does not name PowerBrowser`);
+  }
+  for (const value of Object.values(labels)) out.push(...leakFailures("Orca button label", String(value)));
+  for (const cls of Object.keys(buttons)) {
+    if (!Object.hasOwn(copy, cls)) out.push(`Orca copy: class '${cls}' has buttons but no copy`);
+  }
+  for (const cls of Object.keys(copy)) {
+    if (!Object.hasOwn(buttons, cls)) {
+      out.push(`Orca copy: class '${cls}' has copy but no buttons`);
+      continue;
+    }
+    const message = copy[cls]?.message ?? "";
+    const rendered = new Set();
+    for (const id of buttons[cls]) {
+      if (typeof labels[id] !== "string") out.push(`Orca copy: class '${cls}' renders the button '${id}', which ORCA_BUTTON_LABELS has no label for`);
+      else rendered.add(labels[id]);
+    }
+    for (const label of Object.values(labels)) {
+      const named = message.includes(label);
+      if (named && !rendered.has(label)) out.push(`Orca copy: class '${cls}' names "${label}" but does not render that button`);
+      if (!named && rendered.has(label)) out.push(`Orca copy: class '${cls}' renders "${label}" but its sentence does not name it`);
+    }
+  }
+  // Render sites: no ad-hoc text in the failure folder's components.
+  const tsx = Object.keys(sources).filter((rel) => rel.endsWith(".tsx"));
+  for (const rel of tsx) {
+    const code = blankComments(sources[rel]);
+    for (const m of code.matchAll(/(?<!=)>([^<>{}]*[A-Za-z][^<>{}]*)</g)) {
+      out.push(`Orca copy: ad-hoc JSX text ${JSON.stringify(m[1].trim())} in ${rel} -- page text must come from orca-failure-copy.ts`);
+    }
+    for (const m of code.matchAll(/(?<![=\w])\{\s*('(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`)\s*\}/g)) {
+      out.push(`Orca copy: ad-hoc string-literal JSX child ${m[1]} in ${rel} -- page text must come from orca-failure-copy.ts`);
+    }
+    for (const m of code.matchAll(/\b(title|aria-label|placeholder|alt)=\{?\s*('(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*")/g)) {
+      out.push(`Orca copy: ad-hoc ${m[1]} attribute ${m[2]} in ${rel} -- page text must come from orca-failure-copy.ts`);
+    }
+  }
+  if (!tsx.some((rel) => /ORCA_FAILURE_COPY\[/.test(sources[rel]) && /ORCA_BUTTON_LABELS\[/.test(sources[rel]))) {
+    out.push(`Orca copy: no .tsx under ${dirname(copyRel)}/ indexes ORCA_FAILURE_COPY and ORCA_BUTTON_LABELS -- the page's render site does not resolve to the tables`);
+  }
+  return { failures: out, messages: messages.length };
+}
+
+const ORCA_PAGE_REL = `${ORCA_FAILURE_DIR_REL}orca-failure-page.tsx`;
+const ORCA_COPY_FAULTS = [
+  {
+    name: "a failure code leaked into the could-not-start sentence",
+    apply: (s) => ({ ...s, [ORCA_COPY_REL]: s[ORCA_COPY_REL].replace("PowerBrowser couldn't start Orca. Choose", "PowerBrowser couldn't start Orca (ORCAD_START_FAILED). Choose") }),
+    expect: "ORCAD_START_FAILED",
+  },
+  {
+    name: "an ad-hoc literal in the page component",
+    apply: (s) => ({ ...s, [ORCA_PAGE_REL]: s[ORCA_PAGE_REL].replace("<p>{copy.message}</p>", "<p>Orca stopped working</p>") }),
+    expect: `ad-hoc JSX text "Orca stopped working" in ${ORCA_PAGE_REL}`,
+  },
+  {
+    name: "a sentence naming Restart Orca for a class that does not render it",
+    apply: (s) => ({ ...s, [ORCA_COPY_REL]: s[ORCA_COPY_REL].replace("Reinstall, or open Details for the missing path.", "Reinstall, choose Restart Orca, or open Details for the missing path.") }),
+    expect: `class 'files-missing' names "Restart Orca" but does not render that button`,
+  },
+  {
+    name: "a class with buttons but no copy",
+    apply: (s) => ({ ...s, [ORCA_COPY_REL]: s[ORCA_COPY_REL].replace(/\n {4}'browser-not-attached': \{\n[^}]*\},/, "") }),
+    expect: "class 'browser-not-attached' has buttons but no copy",
+  },
+];
+
+async function runOrcaCopySelfTest() {
+  // harness-other-06: the scope is exercised through the same function the main run uses (orcaScope), over fixture roots.
+  const clean = readOrcaSources();
+  if (!clean) {
+    console.error(`  FAIL  Orca copy faults cannot run -- ${ORCA_ABSENT}`);
+    return { ok: false };
+  }
+  {
+    const fixtures = mkdtempSync(join(tmpdir(), "orca-scope-"));
+    try {
+      const copyDir = (root, dir) => {
+        mkdirSync(join(root, dir), { recursive: true });
+        for (const [rel, text] of Object.entries(clean)) writeFileSync(join(root, dir, rel.slice(rel.lastIndexOf("/") + 1)), text);
+      };
+      const cases = [
+        ["the folder in place", "theia/extensions/orca-panes/src/browser/failure/", (f) => f.length === 0 && true],
+        ["the folder moved within the extension", "theia/extensions/orca-panes/src/browser/errors/", (f) => f.length === 0],
+        ["the extension renamed", "theia/extensions/orca-pane-host/src/browser/failure/", (f) => f.length === 0],
+      ];
+      for (const [name, dir, green] of cases) {
+        const root = join(fixtures, name.replace(/\W+/g, "-"));
+        copyDir(root, dir);
+        const r = await orcaScope(root);
+        if (!green(r.failures) || r.messages === 0) {
+          console.error(`  FAIL  Orca scope, ${name}: expected the copy still checked and green, got ${r.failures.join(" | ") || `${r.messages} messages`}`);
+          return { ok: false };
+        }
+        console.log(`  ok    Orca scope, ${name} -- still found by its export and checked (${r.messages} messages)`);
+      }
+      const gone = join(fixtures, "gone");
+      mkdirSync(join(gone, "theia", "extensions", "orca-panes", "src", "browser"), { recursive: true });
+      writeFileSync(join(gone, "theia", "extensions", "orca-panes", "src", "browser", "other.ts"), "export const X = 1;\n");
+      const absent = await orcaScope(gone);
+      if (!absent.failures.some((f) => f.includes("no file under theia/extensions/*/src exports ORCA_FAILURE_COPY"))) {
+        console.error(`  FAIL  Orca scope with the failure-copy folder gone from an extension that still exists did not go red: ${absent.failures.join(" | ") || "(no failures)"}`);
+        return { ok: false };
+      }
+      const noExt = await orcaScope(join(fixtures, "does-not-exist"));
+      if (!noExt.failures.some((f) => f.includes("no file under theia/extensions/*/src exports ORCA_FAILURE_COPY"))) {
+        console.error("  FAIL  Orca scope in a tree with no extensions at all did not go red");
+        return { ok: false };
+      }
+      console.log("  ok    Orca scope, the failure-copy folder gone, or the whole extension gone -- red, never a SKIP");
+    } finally {
+      rmSync(fixtures, { recursive: true, force: true });
+    }
+  }
+  const baseline = await checkOrcaCopy(clean);
+  if (baseline.failures.length !== 0) {
+    console.error("verify-shell-error-copy --self-test: FAIL -- the Orca-copy baseline is already red:");
+    baseline.failures.forEach((f) => console.error(`  ${f}`));
+    return { ok: false };
+  }
+  let allOk = true;
+  for (const fault of ORCA_COPY_FAULTS) {
+    const mutated = fault.apply(clean);
+    if (JSON.stringify(mutated) === JSON.stringify(clean)) {
+      console.error(`  FAIL  ${fault.name} -- the fault did not apply; this self-test row proves nothing`);
+      allOk = false;
+      continue;
+    }
+    const found = (await checkOrcaCopy(mutated)).failures;
+    if (!found.some((f) => f.includes(fault.expect))) {
+      console.error(`  FAIL  ${fault.name} -- did NOT go red naming ${JSON.stringify(fault.expect)}; got: ${found.join(" | ") || "(no failures at all)"}`);
+      allOk = false;
+    } else {
+      console.log(`  ok    ${fault.name} -- red, naming the drift`);
+    }
+  }
+  return { ok: allOk };
+}
+
+// ---------------------------------------------------------------------------
+// 68-11 bundled-extension reinstall copy. The command label and the three
+// notifications are derived by type-stripping bundled-extensions-copy.ts; each
+// passes the shape test, each notification names PowerBrowser, the declared
+// message keys equal the REINSTALL_MESSAGES.<key> references in the command
+// file (set equality, so an added, removed or stale key goes red), the command's
+// label resolves to REINSTALL_COMMAND_LABEL, and every notification the command
+// file shows takes a REINSTALL_MESSAGES entry as its text (a literal, String(err)
+// or a variable is red). A zero derivation is red.
+// ---------------------------------------------------------------------------
+
+const BUNDLED_SRC_REL = "theia/extensions/bundled-extensions/src/";
+const BUNDLED_COPY_REL = `${BUNDLED_SRC_REL}common/bundled-extensions-copy.ts`;
+const BUNDLED_CMD_REL = `${BUNDLED_SRC_REL}browser/reinstall-command.ts`;
+
+/** rel -> source for the copy table and the command file, or null when either is absent. */
+function readBundledSources() {
+  try {
+    return Object.fromEntries([BUNDLED_COPY_REL, BUNDLED_CMD_REL].map((rel) => [rel, readFileSync(join(REPO_ROOT, rel), "utf8")]));
+  } catch {
+    return null;
+  }
+}
+
+/** @returns {Promise<{ failures: string[], messages: number }>} */
+async function checkBundledCopy(sources) {
+  const out = [];
+  const mod = await importStripped(sources[BUNDLED_COPY_REL] ?? "");
+  const { REINSTALL_COMMAND_LABEL: label, REINSTALL_MESSAGES: messages } = mod;
+  if (mod.loadError || typeof label !== "string" || !messages || typeof messages !== "object") {
+    out.push(`reinstall copy: ${BUNDLED_COPY_REL} did not yield REINSTALL_COMMAND_LABEL and REINSTALL_MESSAGES${mod.loadError ? ` (${mod.loadError})` : ""}`);
+    return { failures: out, messages: 0 };
+  }
+  const entries = Object.entries(messages);
+  if (entries.length === 0) {
+    out.push("reinstall copy: derived ZERO messages from REINSTALL_MESSAGES -- the comparison proves nothing");
+    return { failures: out, messages: 0 };
+  }
+  out.push(...leakFailures("reinstall command label", label));
+  for (const [key, message] of entries) {
+    if (typeof message !== "string" || message.length === 0) {
+      out.push(`reinstall copy: REINSTALL_MESSAGES.${key} has no message string`);
+      continue;
+    }
+    out.push(...leakFailures("reinstall copy", message));
+    if (!message.includes("PowerBrowser")) out.push(`reinstall copy: ${JSON.stringify(message)} (${key}) does not name PowerBrowser`);
+  }
+  const cmd = blankComments(sources[BUNDLED_CMD_REL] ?? "");
+  const referenced = new Set([...cmd.matchAll(/\bREINSTALL_MESSAGES\.(\w+)/g)].map((m) => m[1]));
+  for (const key of referenced) {
+    if (!Object.hasOwn(messages, key)) out.push(`reinstall copy: REINSTALL_MESSAGES.${key} is referenced but not declared`);
+  }
+  for (const [key] of entries) {
+    if (!referenced.has(key)) out.push(`reinstall copy: REINSTALL_MESSAGES.${key} is declared but never shown`);
+  }
+  if (!/\blabel:\s*REINSTALL_COMMAND_LABEL\b/.test(cmd)) out.push(`reinstall copy: the command in ${BUNDLED_CMD_REL} does not take its label from REINSTALL_COMMAND_LABEL`);
+  // WR-07: a positive rule. Every notification's first argument is a REINSTALL_MESSAGES entry,
+  // so String(err), err.message or a variable is red as well as a literal.
+  for (const m of cmd.matchAll(/\.(log|info|warn|error)\(/g)) {
+    const arg = firstArgument(cmd, m.index + m[0].length);
+    if (!/^REINSTALL_MESSAGES\.\w+$/.test(arg)) {
+      out.push(`reinstall copy: ad-hoc notification text ${arg || "(none)"} in ${BUNDLED_CMD_REL} -- notification text must be a REINSTALL_MESSAGES entry from bundled-extensions-copy.ts`);
+    }
+  }
+  return { failures: out, messages: entries.length };
+}
+
+/** The first call argument starting at `from` (just past the open paren), trimmed; bracket depth only. */
+function firstArgument(text, from) {
+  let depth = 0;
+  for (let i = from; i < text.length; i++) {
+    const c = text[i];
+    if ("([{".includes(c)) depth++;
+    else if (")]}".includes(c)) {
+      if (depth === 0) return text.slice(from, i).trim();
+      depth--;
+    } else if (c === "," && depth === 0) return text.slice(from, i).trim();
+  }
+  return text.slice(from).trim();
+}
+
+const BUNDLED_COPY_FAULTS = [
+  {
+    name: "an internal id leaked into the reinstalled notification",
+    apply: (s) => ({ ...s, [BUNDLED_COPY_REL]: s[BUNDLED_COPY_REL].replace("PowerBrowser reinstalled the Claude extension.", "PowerBrowser reinstalled bundledExtensions.seeded.entry.") }),
+    expect: "bundledExtensions.seeded.entry",
+  },
+  {
+    name: "a notification that does not name the product",
+    apply: (s) => ({ ...s, [BUNDLED_COPY_REL]: s[BUNDLED_COPY_REL].replace("or restart PowerBrowser and then try it.", "or restart and then try it.").replace("PowerBrowser couldn't reinstall", "We couldn't reinstall") }),
+    expect: "(failed) does not name PowerBrowser",
+  },
+  {
+    name: "an ad-hoc literal shown by the command",
+    apply: (s) => ({ ...s, [BUNDLED_CMD_REL]: s[BUNDLED_CMD_REL].replace("this.messages.error(REINSTALL_MESSAGES.failed)", "this.messages.error('Reinstall failed')") }),
+    expect: "ad-hoc notification text 'Reinstall failed'",
+  },
+  {
+    name: "a raw exception message shown by the command",
+    apply: (s) => ({ ...s, [BUNDLED_CMD_REL]: s[BUNDLED_CMD_REL].replace("this.messages.error(REINSTALL_MESSAGES.failed)", "this.messages.error(String(err))") }),
+    expect: "ad-hoc notification text String(err)",
+  },
+  {
+    name: "a declared message the command never shows",
+    apply: (s) => ({ ...s, [BUNDLED_CMD_REL]: s[BUNDLED_CMD_REL].replace("this.messages.info(REINSTALL_MESSAGES.present)", "this.messages.info(REINSTALL_MESSAGES.reinstalled)") }),
+    expect: "REINSTALL_MESSAGES.present is declared but never shown",
+  },
+];
+
+async function runBundledCopySelfTest() {
+  const clean = readBundledSources();
+  if (!clean) {
+    // Tracked sources the main mode reads (it is red without them), so plants that cannot run are red, never a
+    // pass or a SKIP (SKIP-PROTOCOL.md: a missing tracked input is red).
+    console.error(`verify-shell-error-copy --self-test: FAIL -- the reinstall-copy faults did not run: ${BUNDLED_COPY_REL} or ${BUNDLED_CMD_REL} is missing. Next step: restore them from version control`);
+    return false;
+  }
+  const baseline = await checkBundledCopy(clean);
+  if (baseline.failures.length !== 0) {
+    console.error("verify-shell-error-copy --self-test: FAIL -- the reinstall-copy baseline is already red:");
+    baseline.failures.forEach((f) => console.error(`  ${f}`));
+    return false;
+  }
+  let allOk = true;
+  for (const fault of BUNDLED_COPY_FAULTS) {
+    const mutated = fault.apply(clean);
+    if (JSON.stringify(mutated) === JSON.stringify(clean)) {
+      console.error(`  FAIL  ${fault.name} -- the fault did not apply; this self-test row proves nothing`);
+      allOk = false;
+      continue;
+    }
+    const found = (await checkBundledCopy(mutated)).failures;
+    if (!found.some((f) => f.includes(fault.expect))) {
+      console.error(`  FAIL  ${fault.name} -- did NOT go red naming ${JSON.stringify(fault.expect)}; got: ${found.join(" | ") || "(no failures at all)"}`);
       allOk = false;
     } else {
       console.log(`  ok    ${fault.name} -- red, naming the drift`);
@@ -1576,7 +2023,18 @@ if (selfTest) {
   if (modesOk) {
     console.log(`verify-shell-error-copy: PASS -- all ${MODES_COPY_FAULTS.length} planted modes-copy faults went red naming the drift`);
   }
-  if (shellOk && modesOk) {
+  console.log(`verify-shell-error-copy --self-test: planting ${ORCA_COPY_FAULTS.length} Orca-copy fault(s)`);
+  const orcaRun = await runOrcaCopySelfTest();
+  const orcaOk = orcaRun.ok;
+  if (orcaOk) {
+    console.log(`verify-shell-error-copy: PASS -- all ${ORCA_COPY_FAULTS.length} planted Orca-copy faults went red naming the drift`);
+  }
+  console.log(`verify-shell-error-copy --self-test: planting ${BUNDLED_COPY_FAULTS.length} reinstall-copy fault(s)`);
+  const bundledOk = await runBundledCopySelfTest();
+  if (bundledOk) {
+    console.log(`verify-shell-error-copy: PASS -- all ${BUNDLED_COPY_FAULTS.length} planted reinstall-copy faults went red naming the drift`);
+  }
+  if (shellOk && modesOk && orcaOk && bundledOk) {
     process.exit(0);
   }
   console.error("verify-shell-error-copy: FAIL -- see the self-test rows above");
@@ -1590,6 +2048,19 @@ if (!argv.includes("--file")) {
     fail(f);
   }
   console.log(`verify-shell-error-copy: widget copy derived from ${widgetCopySourceRels(modesSources).length} chrome-bar source(s)`);
+  const orca = await orcaScope();
+  orca.failures.forEach((f) => fail(f));
+  if (orca.dir) {
+    console.log(`verify-shell-error-copy: Orca scope -- ${orca.messages} messages checked from ${orca.count} source(s) under ${orca.dir}/`);
+  }
+  const bundledSources = readBundledSources();
+  if (!bundledSources) {
+    fail(`reinstall copy: ${BUNDLED_COPY_REL} or ${BUNDLED_CMD_REL} is missing`);
+  } else {
+    const bundled = await checkBundledCopy(bundledSources);
+    bundled.failures.forEach((f) => fail(f));
+    console.log(`verify-shell-error-copy: reinstall scope -- ${bundled.messages} messages and the command label checked`);
+  }
 }
 if (failures.length === 0) {
   console.log(`verify-shell-error-copy: PASS -- no internal identifier can reach the error layer (${target})`);

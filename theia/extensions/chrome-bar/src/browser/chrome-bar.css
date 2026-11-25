@@ -458,6 +458,8 @@
     right: auto;
     width: 320px;
     padding: 4px;
+    /* The panel is portalled to the body; without this its text takes the Theia theme ink over the fixed dark ground. */
+    color: var(--color-text, #fbfbfe);
 }
 
 .pb-site-panel-empty {
@@ -538,7 +540,7 @@
     align-items: center;
     font-size: 13px;
     line-height: 1.4;
-    color: var(--theia-descriptionForeground);
+    color: var(--color-text-muted, #9a99a8);
 }
 
 .pb-site-panel-empty-row {
@@ -548,7 +550,7 @@
     align-items: center;
     font-size: 13px;
     line-height: 1.4;
-    color: var(--theia-descriptionForeground);
+    color: var(--color-text-muted, #9a99a8);
 }
 
 .pb-site-panel-cert-row {
@@ -558,7 +560,7 @@
     align-items: center;
     font-size: 12px;
     line-height: 1.5;
-    color: var(--theia-descriptionForeground);
+    color: var(--color-text-muted, #9a99a8);
     overflow-wrap: anywhere;
 }
 
@@ -581,7 +583,7 @@
 }
 
 .pb-site-panel-row:hover {
-    background: var(--theia-list-hoverBackground);
+    background: var(--color-surface-raised, #35343f);
 }
 
 .pb-site-panel-row:focus-visible {
@@ -607,7 +609,7 @@
 .pb-site-panel-row-state {
     flex: none;
     font-size: 13px;
-    color: var(--theia-descriptionForeground);
+    color: var(--color-text-muted, #9a99a8);
 }
 
 /* Phase 31 plan 03: the one-line notice for a refused or failed action (UI-SPEC Label role). */
@@ -626,7 +628,7 @@
     padding: 0 12px;
     font-size: 13px;
     line-height: 1.4;
-    color: var(--theia-descriptionForeground);
+    color: var(--color-text-muted, #9a99a8);
 }
 
 .pb-chrome-bar-input {
@@ -1176,6 +1178,7 @@
      browsing    strip + URL row
      coding      menubar + URL row
      organising  toolbar + URL row
+     orca        menubar + URL row
 
    Before this was per-mode the height was pinned at the two-row value for
    every mode, and that single number caused three separate problems: the
@@ -1186,7 +1189,8 @@ body[data-pb-mode] #theia-top-panel {
     min-height: calc(40px + var(--pb-bookmarks-toolbar-height, 0px) + var(--pb-find-strip-height, 0px));
 }
 
-body[data-pb-mode="coding"] #theia-top-panel {
+body[data-pb-mode="coding"] #theia-top-panel,
+body[data-pb-mode="orca"] #theia-top-panel {
     min-height: calc(var(--theia-private-menubar-height) + 40px + var(--pb-bookmarks-toolbar-height, 0px) + var(--pb-find-strip-height, 0px));
 }
 
@@ -1341,6 +1345,26 @@ body[data-pb-mode="browsing"] .pb-tab-strip {
     right: 0;
     bottom: 2px;
     margin: 0;
+    font-size: 10px;
+    line-height: 1;
+}
+
+/* The icon's 6px trailing margin would push the centred icon 3px left; the attention dot and the pending-prompt
+   mark go out of the flow like the audio mark, so they neither shift the icon nor overflow the 30px tab. */
+.pb-tab.is-pinned .pb-tab-favicon,
+.pb-tab.is-pinned .pb-tab-crashed {
+    margin-right: 0;
+}
+
+.pb-tab.is-pinned .pb-tab-attention,
+.pb-tab.is-pinned .pb-tab-prompt-pending {
+    position: absolute;
+    top: 3px;
+    right: 1px;
+    margin: 0;
+}
+
+.pb-tab.is-pinned .pb-tab-prompt-pending {
     font-size: 10px;
     line-height: 1;
 }
@@ -1688,6 +1712,35 @@ body[data-pb-mode="browsing"] .lm-TabBar-tab.pb-strip-only {
     border: 1px solid var(--theia-focusBorder);
     border-radius: 12px;
     color: var(--color-text, #fbfbfe);
+}
+
+/* Phase 66 (P66-21): the agent mark beside the sharing indicator, ringed in the accent like it, with a compact Stop. */
+.pb-chrome-bar-agent {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 2px 0 6px;
+    border: 1px solid var(--theia-focusBorder);
+    border-radius: 12px;
+    color: var(--color-text, #fbfbfe);
+    white-space: nowrap;
+}
+
+.pb-chrome-bar-agent .codicon {
+    font-size: 16px;
+}
+
+.pb-chrome-bar-agent .pb-chrome-bar-agent-stop {
+    width: auto;
+    height: 20px;
+    padding: 0 8px;
+    border-radius: 10px;
+}
+
+/* Phase 66 (P66-21): a dock tab an agent drives carries an accent underline, so a background agent tab is identifiable. */
+.lm-TabBar-tab.pb-agent-controlled {
+    box-shadow: inset 0 -2px 0 var(--theia-focusBorder);
 }
 
 /* PAGE-04 (32-08): the favicon or globe on a web tab, 16px; the crashed mark uses the muted ink, no new accent. */

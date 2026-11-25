@@ -27,3 +27,8 @@ browser.jar:
    content/powerbrowser/PowerBrowserAPI.sys.mjs    (PowerBrowserAPI.sys.mjs)
    content/powerbrowser/GroupActorChild.sys.mjs    (GroupActorChild.sys.mjs)
    content/powerbrowser/TheiaService.sys.mjs    (TheiaService.sys.mjs)
+   content/powerbrowser/OrcaService.sys.mjs     (OrcaService.sys.mjs)
+   content/powerbrowser/OrcaEnv.sys.mjs         (OrcaEnv.sys.mjs)
+# Phase 67 (INJ-01, P67-25): the PowerBrowser mark for Orca's landing tile, packaged from the repository's brand/
+# folder, never copied into the tree. A leading "/" is relative to TOPSRCDIR (upstream/); the repo root is its parent.
+   content/powerbrowser/mark.svg                (/../brand/mark.svg)

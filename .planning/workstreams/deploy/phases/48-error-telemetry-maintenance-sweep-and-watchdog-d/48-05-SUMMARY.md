@@ -165,10 +165,10 @@ A: D1 id, wrangler version, schema tail, rule threshold plus period, synthetic 2
 
 | Section | Evidence | State |
 | ------- | -------- | ----- |
-| Cloudflare deploy (D1 id, wrangler version, schema tail, rule threshold plus period, synthetic POST plus one row, 413, burst) | none yet | open |
-| Pinned maintenance issue (link, pin, body-equals-render, three no-data rows, one comment, zero comments, restored green) | none yet | open |
+| Cloudflare deploy (D1 id, wrangler version, schema tail, rule threshold plus period, synthetic POST plus one row, 413, burst) | done live 2026-11-07 (CARRY-FORWARD section 2); D1 id not committed (OWNER-PASS section 3b). Worker on events.powerbrowser.org, D1 `powerbrowser-events`, probes 200 synthetic, 413, 429; one zone rate-limit rule, 10 per 10 s per IP. Wrangler version, schema tail and D1 row count are not in the source | done live |
+| Pinned maintenance issue (link, pin, body-equals-render, three no-data rows, one comment, zero comments, restored green) | done live 2026-11-07 (CARRY-FORWARD section 2): maintenance issue #7 pinned. Body-equals-render and the three no-data rows are not in the source; the red-row plant (one comment, zero comments, restored green) is parked | done live (pin); plant open |
 | Full-tier drill (`tel06-error-delivery-live` PASS line with date) | none yet | open |
-| Watchdog (apply SHA, disable and re-enable dates, watchdog issue with run link plus timestamps) | none yet | open |
+| Watchdog (apply SHA, disable and re-enable dates, watchdog issue with run link plus timestamps) | applied, disabled until the clock ticks | open |
 | 60-day probe (last-commit and last-run dates of `Deocracy/powerbrowser-updates` at apply time) | none yet | open |
 | Secrets record | none yet | open |
 
@@ -204,3 +204,37 @@ None.
 
 - This file is the only file written; no tree file under `scripts/`, `worker/`, `theia/`, `powerbrowser/`, `.github/`, `ledger/` or `upstream/` was touched.
 - Brand scan green after staging: re-run at commit time (see the task report).
+
+## Live state at parking (2026-11-07, recorded by Phase 59 plan 59-01)
+
+Source: `.planning/CARRY-FORWARD-v1.7.md` section 2, "Live state at parking", and the phase 48 and
+57 rows of its section 5 BLOCKED table. Chris did this work live on 2026-11-06/07. Plan 59-01
+copied the record, redid nothing, and filled the operator-record rows above whose step was done
+live. "done live" in that table means the owner step was done; it does not mean a registry live
+row is green. The organisation is Deocracy.
+
+Done live:
+
+- Events Worker on events.powerbrowser.org with D1 `powerbrowser-events`; probes 200 synthetic,
+  413, 429 (section A). The D1 id is not committed (OWNER-PASS section 3b).
+- `DOWNLOAD_COUNT_SECRET` in the Worker and the bot environment; the synthetic probe secret set and
+  probed (BLOCKED.md item 6).
+- One zone rate-limit rule, 10 per 10 s per IP: the Free-plan form of the 60/min ruling (step A6).
+- Maintenance issue #7 pinned (step B8).
+- Watchdog applied, and disabled until the clock ticks (step D12).
+- Crash Worker on crash.powerbrowser.org (probes 200 CrashID, 413, 429) and the R2 bucket
+  `powerbrowser-crash-reports` (private, 30-day lifecycle): Phase 57's receiver (57 BLOCKED.md B3).
+
+Parked, open:
+
+- The 26-hour watchdog drill (step D14). The watchdog stays disabled until the scheduler clock
+  ticks (43-05).
+- The red-row plant (step B10).
+- `tel06-error-delivery-live` on a clean tree (step C11). WINDOWS.md 33: the drill refuses a dirty
+  tree.
+- `GH_PAT` for the status repo `Deocracy/powerbrowser-status` (CF-01; the status page is Phase
+  53's).
+
+Not in the source, so not recorded: the wrangler version, the schema tail, the D1 row count, the
+sweep render evidence (B9), the watchdog apply SHA, the 60-day probe dates (D13) and the secrets
+record (E15). `status: partial` and `requirements-completed: []` stand.

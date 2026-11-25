@@ -181,6 +181,26 @@
       "regex_help": "an exact Theia release triple, never a range or a floating tag; digits and dots only, three numeric parts",
       "regex_example": "9.9.9"
     },
+    "upstreams.orca_tag": {
+      "type": "string",
+      "required": false,
+      "regex": "^v[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "regex_help": "an exact Orca release tag with a leading v, never a range or a branch; v followed by three numeric parts",
+      "regex_example": "v9.9.9"
+    },
+    "upstreams.orca_commit": {
+      "type": "string",
+      "required": false,
+      "regex": "^[0-9a-f]{40}$",
+      "regex_help": "the full 40-character lowercase hex commit the Orca tag peels to, never the annotated tag object",
+      "regex_example": "0123456789abcdef0123456789abcdef01234567"
+    },
+    "orca.seam_cap": {
+      "type": "integer",
+      "required": false,
+      "minimum": 1,
+      "type_help": "a whole number of at least 1 written without quotes; the most upstream Orca files the overlay may patch"
+    },
     "variants[].id": {
       "type": "string",
       "required": true,

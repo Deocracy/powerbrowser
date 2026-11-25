@@ -226,10 +226,10 @@ def main():
                     help="also fail due open rows, unapproved deferrals and overdue deferrals")
     ap.add_argument("--run-check", action="store_true",
                     help="also run the ledger check_cmd through the shell")
-    # Budget under the 600 s Stop hook timeout (a killed hook does not block):
-    # git fingerprint 3x10 + check_cmd 480 + kill wait 5 + mockup 30 + scope 15
-    # + phase gate 30 = 590 s.
-    ap.add_argument("--check-timeout", type=float, default=480,
+    # Budget under the 1020 s Stop hook timeout (a killed hook does not block):
+    # git fingerprint 3x10 + check_cmd 900 + kill wait 5 + mockup 30 + scope 15
+    # + phase gate 30 = 1010 s (D-63 (11), Chris 2026-11-23).
+    ap.add_argument("--check-timeout", type=float, default=900,
                     help="seconds before check_cmd counts as timed out")
     args = ap.parse_args()
     root = Path(args.root)

@@ -91,6 +91,15 @@ cleanup() {
     # grandchild of the tracked PID and would survive a plain `kill $SERVER_PID`.
     kill -- "-$SERVER_PID" 2>/dev/null || kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
+    # The backend runs in its own session and shuts down a few seconds after its parents: wait for it, then end it,
+    # so nothing outlives this script.
+    local pids="" i
+    for i in $(seq 1 40); do
+      pids="$(pgrep -f -- "^[^ ]*node $REPO_ROOT/theia/applications/browser/lib/backend/main.js --port $PORT\$" || true)"
+      [ -z "$pids" ] && break
+      sleep 0.25
+    done
+    [ -z "$pids" ] || kill -KILL $pids 2>/dev/null || true
   fi
 }
 trap cleanup EXIT

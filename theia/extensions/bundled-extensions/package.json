@@ -1,0 +1,25 @@
+{
+  "private": true,
+  "name": "@powerbrowser/bundled-extensions",
+  "version": "0.1.0",
+  "license": "MIT",
+  "dependencies": {
+    "@theia/core": "1.76.0",
+    "@theia/plugin-ext": "1.76.0",
+    "@theia/plugin-ext-vscode": "1.76.0"
+  },
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/bundled-extensions-frontend-module",
+      "backend": "lib/node/bundled-extensions-backend-module"
+    }
+  ],
+  "files": [
+    "lib",
+    "src"
+  ],
+  "scripts": {
+    "clean": "rm -rf lib *.tsbuildinfo",
+    "build": "tsc -b"
+  }
+}

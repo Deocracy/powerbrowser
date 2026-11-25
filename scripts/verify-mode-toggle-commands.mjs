@@ -42,6 +42,14 @@
  *    widget skips all of it. Derived from the anchored `selectMode` body, so
  *    an import that nothing calls does not satisfy it.
  *
+ * 5. THE IDE DRESS (P64-19). The chrome bar decides dress by mode in three
+ *    places -- applyStripHome's `ideDress` initializer, publishDragRegions'
+ *    menubar row and chrome-bar.css's top-panel rules that reserve the
+ *    menubar height -- and the mode service shows the IDE furniture for the
+ *    `furniture: true` rows of SHIPPED_MODE_RULES. All four mode sets are
+ *    derived and required equal: a mode in one and not another shows a
+ *    menubar with no room for it, or drag regions over the wrong row.
+ *
  * Modes ship as data, never manifest flags: a scoped negated search fails on
  * any bare `[modes]` section in the configuration schema, the generator, or
  * the modes sources. Backtick-wrapped prose mentions (this file's own
@@ -70,6 +78,7 @@ const NAME = 'verify-mode-toggle-commands';
 const DESCRIPTORS_REL = 'theia/extensions/modes/src/browser/mode-descriptors.ts';
 const SERVICE_REL = 'theia/extensions/modes/src/browser/mode-service.ts';
 const WIDGET_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar-widget.tsx';
+const CSS_REL = 'theia/extensions/chrome-bar/src/browser/chrome-bar.css';
 const SCHEMA_REL = 'scripts/lib/config-schema.json';
 const GENERATOR_REL = 'scripts/generate.mjs';
 const MODES_GLOB_RELS = [
@@ -213,6 +222,8 @@ function derivedShippedRules(source) {
                 rule[area] = m[1];
             }
         }
+        const furniture = /\bfurniture:\s*(true|false)\b/.exec(text);
+        rule.furniture = furniture ? furniture[1] === 'true' : undefined;
         const views = /views:\s*\{([^}]*)\}/.exec(text);
         for (const area of views ? AREAS : []) {
             const list = new RegExp(`\\b${area}:\\s*\\[([^\\]]*)\\]`).exec(views[1]);
@@ -225,6 +236,35 @@ function derivedShippedRules(source) {
         }
     }
     return Object.keys(byId).length ? { byId } : undefined;
+}
+
+/** The quoted mode ids `<name> === '<id>'` compares against in `text`. */
+function comparedIds(text, name) {
+    return [...text.matchAll(new RegExp(`\\b${name}\\s*===\\s*'([^']+)'`, 'g'))].map(m => m[1]);
+}
+
+/**
+ * P64-19: the four mode sets that decide the IDE dress, each derived from its
+ * own source. An empty set means the rule moved, never "no mode".
+ */
+function derivedDressSets(widgetSrc, cssSrc, rules) {
+    const strip = bodyOf(widgetSrc, /applyStripHome\s*\([^)]*\)\s*:\s*void\s*\{/);
+    const init = strip === undefined ? undefined : /\bconst\s+ideDress\s*=\s*([^;]*);/.exec(strip);
+    const drag = bodyOf(widgetSrc, /publishDragRegions\s*\(\s*\)\s*:\s*void\s*\{/);
+    const branch = drag === undefined ? undefined : /if\s*\(([^{]*&&\s*menubar)\s*\)\s*\{/.exec(drag);
+    const css = cssSrc.replace(/\/\*[\s\S]*?\*\//g, '');
+    const cssIds = [];
+    for (const rule of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+        if (rule[2].includes('--theia-private-menubar-height')) {
+            cssIds.push(...[...rule[1].matchAll(/data-pb-mode="([^"]+)"/g)].map(m => m[1]));
+        }
+    }
+    return [
+        { name: `${WIDGET_REL} applyStripHome ideDress`, ids: init ? comparedIds(init[1], 'modeId') : [] },
+        { name: `${WIDGET_REL} publishDragRegions menubar row`, ids: branch ? comparedIds(branch[1], 'mode') : [] },
+        { name: `${CSS_REL} top-panel menubar height rule`, ids: cssIds },
+        { name: `${SERVICE_REL} SHIPPED_MODE_RULES furniture:true rows`, ids: rules ? Object.keys(rules.byId).filter(id => rules.byId[id].furniture === true) : [] },
+    ];
 }
 
 /**
@@ -335,6 +375,24 @@ function checkModes(sources) {
         failures.push(`${WIDGET_REL}: selectMode does not execute MODES_ACTIVATE_COMMAND_ID -- a shipped segment that switches the perspective directly skips the mode's panel map, its Explorer dock and the organising slot, which is exactly why Coding used to show no view`);
     }
 
+    // 5. The IDE dress (P64-19): the three chrome-bar decisions and the
+    // furniture rows name the same modes.
+    const dress = derivedDressSets(widgetSrc, sources[CSS_REL] ?? '', rules);
+    for (const set of dress) {
+        if (set.ids.length === 0) {
+            failures.push(`${set.name}: derived ZERO mode ids -- dress rule moved, so the dress comparison proves nothing`);
+        }
+    }
+    const reference = dress[dress.length - 1];
+    if (reference.ids.length) {
+        for (const set of dress.slice(0, -1).filter(s => s.ids.length)) {
+            const d = diff(set.ids, reference.ids);
+            if (d.surplus.length || d.missing.length) {
+                failures.push(`IDE dress drift: ${set.name} [${set.ids.join(', ')}] against ${reference.name} [${reference.ids.join(', ')}]${d.missing.length ? ` -- missing ${d.missing.join(', ')}` : ''}${d.surplus.length ? ` -- extra ${d.surplus.join(', ')}` : ''}`);
+            }
+        }
+    }
+
     // Modes ship as data: no manifest flag in schema, generator, or sources.
     const flagRels = [SCHEMA_REL, GENERATOR_REL, ...MODES_GLOB_RELS];
     for (const row of derivedManifestFlags(sources, flagRels)) {
@@ -346,7 +404,7 @@ function checkModes(sources) {
 
 function readSources() {
     const out = {};
-    for (const rel of [DESCRIPTORS_REL, SERVICE_REL, WIDGET_REL, SCHEMA_REL, GENERATOR_REL, ...MODES_GLOB_RELS]) {
+    for (const rel of [DESCRIPTORS_REL, SERVICE_REL, WIDGET_REL, CSS_REL, SCHEMA_REL, GENERATOR_REL, ...MODES_GLOB_RELS]) {
         try {
             out[rel] = readFileSync(join(REPO_ROOT, rel), 'utf8');
         } catch {
@@ -369,7 +427,8 @@ function main() {
         return 1;
     }
     const count = derivedShippedModes(sources[DESCRIPTORS_REL] ?? '').modes.length;
-    console.log(`${NAME}: PASS -- ${count} shipped modes agree across the descriptors, the switch path and the toggle (order, ids, labels, placements, collapse), and the toggle activates modes through the mode command`);
+    const dressIds = derivedDressSets(sources[WIDGET_REL] ?? '', sources[CSS_REL] ?? '', derivedShippedRules(sources[SERVICE_REL] ?? ''))[0].ids;
+    console.log(`${NAME}: PASS -- ${count} shipped modes agree across the descriptors, the switch path and the toggle (order, ids, labels, placements, collapse), the toggle activates modes through the mode command, and the IDE dress is [${dressIds.join(', ')}] in all four places`);
     return 0;
 }
 
@@ -385,6 +444,15 @@ function selfTest() {
     const cleanDescriptors = clean[DESCRIPTORS_REL];
     const cleanService = clean[SERVICE_REL];
     const cleanWidget = clean[WIDGET_REL];
+    const cleanCss = clean[CSS_REL];
+    // Reorder anchors built from the clean sources, so an appended mode never
+    // breaks them: swap the first two entries of each array literal.
+    const swapFirstTwo = (text, re) => {
+        const m = re.exec(text);
+        const parts = m[2].split(',').map(p => p.trim());
+        [parts[0], parts[1]] = [parts[1], parts[0]];
+        return text.slice(0, m.index) + m[1] + parts.join(', ') + m[3] + text.slice(m.index + m[0].length);
+    };
     const cases = [
         {
             name: 'planted id removal',
@@ -407,10 +475,7 @@ function selfTest() {
             // toggle's order comes from this array, so this is the reorder
             // that a block-order derivation would have missed entirely.
             name: 'planted SHIPPED_MODES export reorder',
-            mutate: sources => ({ ...sources, [DESCRIPTORS_REL]: cleanDescriptors.replace(
-                '= [coding, browsing, organising];',
-                '= [coding, organising, browsing];'
-            ) }),
+            mutate: sources => ({ ...sources, [DESCRIPTORS_REL]: swapFirstTwo(cleanDescriptors, /(export const SHIPPED_MODES[^=]*=\s*\[)([^\]]*)(\])/) }),
             expect: 'order drifted',
         },
         {
@@ -438,10 +503,7 @@ function selfTest() {
         },
         {
             name: 'planted toggle reorder',
-            mutate: sources => ({ ...sources, [WIDGET_REL]: cleanWidget.replace(
-                "static readonly MODES = ['Coding', 'Browsing', 'Organising'];",
-                "static readonly MODES = ['Browsing', 'Coding', 'Organising'];"
-            ) }),
+            mutate: sources => ({ ...sources, [WIDGET_REL]: swapFirstTwo(cleanWidget, /(static readonly MODES\s*=\s*\[)([^\]]*)(\])/) }),
             expect: 'order drifted',
         },
         {
@@ -453,6 +515,46 @@ function selfTest() {
                 'await this.perspectives.switchPerspective(next.toLowerCase());'
             ) }),
             expect: 'MODES_ACTIVATE_COMMAND_ID',
+        },
+        {
+            name: 'planted orca dropped from the top-panel menubar height rule',
+            mutate: sources => ({ ...sources, [CSS_REL]: cleanCss.replace(
+                ',\nbody[data-pb-mode="orca"] #theia-top-panel {',
+                ' {'
+            ) }),
+            expect: 'top-panel menubar height rule [coding] against',
+        },
+        {
+            name: 'planted ideDress naming coding only',
+            mutate: sources => ({ ...sources, [WIDGET_REL]: cleanWidget.replace(
+                "const ideDress = modeId === 'coding' || modeId === 'orca';",
+                "const ideDress = modeId === 'coding';"
+            ) }),
+            expect: 'applyStripHome ideDress [coding] against',
+        },
+        {
+            name: 'planted drag-region menubar branch without orca',
+            mutate: sources => ({ ...sources, [WIDGET_REL]: cleanWidget.replace(
+                "} else if ((mode === 'coding' || mode === 'orca') && menubar) {",
+                "} else if (mode === 'coding' && menubar) {"
+            ) }),
+            expect: 'publishDragRegions menubar row [coding] against',
+        },
+        {
+            name: 'planted orca rules row with furniture false',
+            mutate: sources => ({ ...sources, [SERVICE_REL]: cleanService.replace(
+                /(\n\s*orca: \{[^\n]*?)furniture: true/,
+                '$1furniture: false'
+            ) }),
+            expect: 'furniture:true rows [coding] -- extra orca',
+        },
+        {
+            name: 'planted ideDress initializer renamed',
+            mutate: sources => ({ ...sources, [WIDGET_REL]: cleanWidget.replace(
+                'const ideDress = modeId',
+                'const wearsIde = modeId'
+            ) }),
+            expect: 'dress rule moved',
         },
     ];
 

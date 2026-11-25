@@ -30,9 +30,9 @@
  *      `openStockTab('about:…')` call site with a positive control (the
  *      existing `openStockTab` method is still found, so "removed
  *      everywhere" cannot pass);
- *   5. `MENU_ORDER` ids equal the hamburger `menuId`s rendered -- plan 04
- *      renders them, so before then this case is `SKIP menu-not-landed`,
- *      never pass, never silent; the sibling write-arm case asserts no
+ *   5. `MENU_ORDER` ids equal the hamburger `menuId`s rendered (plan 04
+ *      landed them; a case that returns anything but null is a failure,
+ *      never a pass and never a skip); the sibling write-arm case asserts no
  *      sender-supplied origin (the `data.origin` T-31-05 shape) with a
  *      positive control on the overlay-derived read;
  *   6. absence: `startsWith('https://')` appears nowhere in `address-bar.tsx`
@@ -116,9 +116,10 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -470,6 +471,46 @@ function wantSequence(rows) {
  * tested only itself. It is removed; the plant drives the real instruments.)
  */
 function catalogueFailures() {
+    const key = catalogueInputKey();
+    if (!catalogueVerdicts.has(key)) {
+        catalogueVerdicts.set(key, runCatalogueInstruments());
+    }
+    return catalogueVerdicts.get(key);
+}
+
+/**
+ * D-60: the two instruments read only the REAL tree, never the planted `srcs` map: their own two scripts, the
+ * catalogue, and powerbrowser/shell (the boundary file, the actor child, and every `<name>.sys.mjs` a catalogue
+ * row cites, which ng-040 resolves inside that directory). Their verdict is memoized per process on a SHA-256
+ * over the path and bytes of every one of those files, re-read on every call: a call whose inputs differ by
+ * one byte, or whose shell directory gained or lost a file, runs both instruments again. A self-test plant
+ * edits only its in-memory sources and a scratch table, so every plant reuses the clean run's verdict; the
+ * catalogue plant drives the instrument on its own planted tree below, outside this memo.
+ */
+const CATALOGUE_INPUT_FILES = ['scripts/check-internals-boundary.sh', 'scripts/verify-ng-040-internals-catalogue-lines.mjs', INTERNAL_APIS_REL];
+const CATALOGUE_INPUT_DIR = 'powerbrowser/shell';
+const catalogueVerdicts = new Map();
+function catalogueInputKey() {
+    const dirFiles = readdirSync(join(REPO_ROOT, CATALOGUE_INPUT_DIR), { recursive: true, withFileTypes: true })
+        .filter(entry => entry.isFile())
+        .map(entry => relative(REPO_ROOT, join(entry.parentPath, entry.name)));
+    const hash = createHash('sha256');
+    for (const rel of [...new Set([...CATALOGUE_INPUT_FILES, ...dirFiles])].sort()) {
+        let bytes;
+        try {
+            bytes = readFileSync(join(REPO_ROOT, rel));
+        } catch {
+            bytes = null;
+        }
+        hash.update(`${rel}\0${bytes === null ? 'absent' : bytes.length}\0`);
+        if (bytes !== null) {
+            hash.update(bytes);
+        }
+    }
+    return hash.digest('hex');
+}
+
+function runCatalogueInstruments() {
     const out = [];
     const catalogue = spawnSync('bash', ['scripts/check-internals-boundary.sh', '--catalogue'], { cwd: REPO_ROOT, encoding: 'utf8' });
     if (catalogue.status !== 0) {
@@ -1006,7 +1047,15 @@ function cases(m, srcs, mm) {
             if (/win\.setTimeout/.test(body)) {
                 return 'the poll waits on win.setTimeout, which never fires once the stock window is destroyed (the openStockPage reply would hang)';
             }
-            return body.includes('await PowerBrowserAPI.sleep(') ? null : 'the poll does not wait on the module sleep()';
+            return /await (Promise\.race\(\[)?PowerBrowserAPI\.sleep\(/.test(body) ? null : 'the poll does not wait on the module sleep()';
+        }],
+        // 2026-11-16 gate (ext-tab-host-live options-page-switch): on the 50 ms tick alone, a second openOptionsPage reached
+        // the just-started window's stock switchToTabHavingURI before the deferred options tab was added, so two opened.
+        ['the stock-window startup wait also wakes on the window\'s own delayedStartupPromise', () => {
+            const code = stripComments(apiSrc);
+            const start = code.indexOf('async function stockWindowStarted(win) {');
+            const body = start < 0 ? '' : code.slice(start, code.indexOf('\n}\n', start));
+            return /await Promise\.race\(\[[^\]]*win\.delayedStartupPromise/.test(body) ? null : 'the wait only polls the flag: an extension call can reach the started window between the flag and the caller';
         }],
         ['webTabSiteInfo captures the origin before its await and refuses a page change (WR-01)', () => {
             const code = stripComments(apiSrc);
@@ -1143,8 +1192,6 @@ async function runAt(tablePath, srcs, menuPath) {
         }
         if (got === null) {
             oks.push(name);
-        } else if (typeof got === 'string' && got.startsWith('SKIP ')) {
-            oks.push(`${name} (${got})`);
         } else {
             failures.push(`${name}: ${JSON.stringify(got)}`);
         }
@@ -1264,9 +1311,16 @@ const PLANTS = [
     {
         name: 'the stock-window poll waits on a window timer (WR-07)',
         rel: API_REL,
-        from: '    await PowerBrowserAPI.sleep(50);',
-        to: '    await new Promise(resolve => win.setTimeout(resolve, 50));',
+        from: '    await Promise.race([PowerBrowserAPI.sleep(50), win.delayedStartupPromise].filter(Boolean));',
+        to: '    await Promise.race([new Promise(resolve => win.setTimeout(resolve, 50)), win.delayedStartupPromise].filter(Boolean));',
         expect: 'the stock-window startup poll uses the module sleep, not a window timer (WR-07)',
+    },
+    {
+        name: 'the stock-window wait polls the flag only (2026-11-16 gate)',
+        rel: API_REL,
+        from: '    await Promise.race([PowerBrowserAPI.sleep(50), win.delayedStartupPromise].filter(Boolean));',
+        to: '    await PowerBrowserAPI.sleep(50);',
+        expect: 'the stock-window startup wait also wakes on the window\'s own delayedStartupPromise',
     },
     {
         name: 'the purge joins the clear try (WR-06)',
@@ -1616,7 +1670,7 @@ async function selfTest() {
     let failed = 0;
     const sources = readSources();
     const clean = await runAt(join(REPO_ROOT, TABLE_REL), sources, join(REPO_ROOT, APP_MENU_REL));
-    const cleanRed = clean.failures.filter(f => !f.includes('SKIP'));
+    const cleanRed = clean.failures;
     if (cleanRed.length) {
         console.error(`${NAME} --self-test: FAIL -- the clean tree is not green: ${cleanRed.join(' | ')}`);
         return 1;

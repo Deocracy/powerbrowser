@@ -3,6 +3,10 @@ status: investigating
 trigger: "Investigate issue: G-13-3 — Phase 13 chrome bar: suggestion activation does not navigate, bar above tab strip instead of below per mock order, general functionality wrong."
 created: 2026-09-06T00:00:00.000Z
 updated: 2026-09-06T00:00:00.000Z
+audit_acknowledged:
+  milestone: v1.7
+  at: 2026-11-25
+  status: investigating
 ---
 
 ## Current Focus

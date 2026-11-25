@@ -1352,11 +1352,14 @@ async function scenarioPopupBlock(app, fx, plant) {
     if (clicked !== 'clicked') {
         return clicked;
     }
-    const opened = await pollFor(async () => ((await mainOrder(app)).find(w => /\/(?:b|e)$/.test(String(w.url))) ? true : null), 8000, 'the adopted popup').catch(() => false);
-    if (!opened) {
+    // WINDOWS 39: judge the order read that saw the adopted tab; a second read can catch it passing through about:blank.
+    const order = await pollFor(async () => {
+        const o = await mainOrder(app);
+        return o.some(w => /\/(?:b|e)$/.test(String(w.url))) ? o : null;
+    }, 8000, 'the adopted popup').catch(() => null);
+    if (!order) {
         return 'the bar Allow opened no web tab for the stored popup';
     }
-    const order = await mainOrder(app);
     if (order.some(w => String(w.url).endsWith('/e'))) {
         return FRAME_URL_OPENED;
     }

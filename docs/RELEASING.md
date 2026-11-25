@@ -373,7 +373,28 @@ installed at the path below) and GH-07 (the `release` and `descriptor` environme
 
 **Runner user and work directory.** The unit runs as its own system user, `pb-runner`, with
 `autoSubUidGidRange` for rootless podman. Its work directory is `/var/lib/pb-runner`. The path
-holds no space, because the build tooling breaks on one (hard rule 4 in `CLAUDE.md`). The runner
+holds no space, because the build tooling breaks on one (hard rule 4 in `CLAUDE.md`). The
+github-runner module does not create the work directory, sets `HOME` to it and deletes its contents
+on every start, so `systemd/legion-pb.nix` creates it with a tmpfiles rule and keeps the rootless
+podman image store outside it, in `/var/lib/pb-runner-data` (`XDG_DATA_HOME`). The file also relaxes
+the module's default sandbox for this runner only (`serviceOverrides`: user namespaces, the setuid
+`newuidmap` helpers with `CAP_SETUID` and `CAP_SETGID` in the bounding set, `/dev/fuse` and
+`/dev/net/tun`, the `/proc` over-mounts, mount, `capset` and `sethostname` system calls), because
+rootless podman cannot start under the defaults; each relaxed setting carries its reason in the
+file. The price is stated in the file's header: build code on this runner can create unprivileged
+user, mount and network namespaces, run host setuid programs that keep those two capabilities,
+create setuid files, see host files and processes under their real uids and see the full `/dev`
+tree. With `ProtectKernelTunables` off, `/proc/sys`, `/sys` and the other kernel-variable paths are
+no longer read-only and `/proc/kallsyms` and `/proc/kcore` are no longer hidden; a procfs sysctl
+write is checked against the writer's euid and the file's mode bits, not a capability, so a job that
+compromises a host setuid-root program gets euid 0 and can write the root-owned 0644 sysctls.
+`ProtectHostname` is `private` (the unit's own UTS namespace), and `syslog(2)` stays filtered. The
+file also enables `virtualisation.containers`, which writes the `/etc/containers` policy and
+registry files podman reads, with `docker.io` as the one search registry. That is why third-party build code should run inside the container or off this host. The
+runner user is not in the `libvirtd` group: management access to `qemu:///system` is
+root-equivalent, and this user runs the release build's third-party build code. The
+`legion-runner-unit` row derives the module's hardening defaults from its source and checks the
+overrides against them; the first deployment is what proves the unit starts and podman runs. The runner
 user has **no read access** to `~/.config/powerbrowser-release/` (the MAR key store on `legion`)
 or to the registration file. The owner verifies both with `sudo -u pb-runner test -r <path>`, and
 each check must fail.
@@ -418,10 +439,18 @@ These option names were verified on nixos unstable (2026-10-31): under
 (exactly one of `isNormalUser` and `isSystemUser` is set), `users.users.<name>.autoSubUidGidRange`,
 `users.groups`, and `environment.etc.<name>.source` and `.mode` (a mode other than `"symlink"`
 copies the file). Set `tokenType = "registration"` explicitly, and `ephemeral = false`: ephemeral
-with a registration token fails on restart. **Not verified:** how the module behaves with a static
-`user` and a custom `workDir` (state directory ownership, sandbox write paths), and whether rootless
-podman works for `pb-runner`. `pkexec nixos-rebuild dry-build` catches a wrong option name but not
-either of those; the owner checks them at apply.
+with a registration token fails on restart. The module's behaviour with a static `user` and a
+custom `workDir` was read from its source on legion's nixos-26.05 channel
+(`github-runner/service.nix`): it bind-mounts and enters `workDir` without creating it, and its
+default sandbox blocks rootless podman. `systemd/legion-pb.nix` answers both (see "Runner user and
+work directory" above), and `services.github-runners.<name>.serviceOverrides` is the option it uses.
+**Not verified:** that rootless podman then runs every release step for `pb-runner`; the first
+deployment is the proof, and the file names the next settings to relax if a podman step still fails.
+`pkexec nixos-rebuild dry-build` catches a wrong option name but not that.
+
+The block below is the runner core only. Install `systemd/legion-pb.nix` itself (its header lists
+the steps); the file also carries the work-directory and podman-store tmpfiles rules, the
+`XDG_DATA_HOME` line and the `serviceOverrides` that this block omits.
 
 ```nix
 services.github-runners.powerbrowser-release = {
@@ -459,8 +488,9 @@ pkexec bash -c 'export PATH=/run/current-system/sw/bin:/run/wrappers/bin:$PATH; 
 ```
 
 The unit is `github-runner-powerbrowser-release.service`, and `count` defaults to 1. The runner
-keeps its registration and its work directory between jobs. A stuck job is cleared by restarting
-the unit, not by cleaning the work directory while the unit runs.
+keeps its registration and its work directory between jobs, and the module deletes the work
+directory's contents on every start of the unit. A stuck job is cleared by restarting the unit, not
+by cleaning the work directory while the unit runs.
 
 **Runner acceptance drill (mandatory).** The local `env -i` run of the hook tests the script, not
 the runner. It cannot show whether job-controlled environment or a container set-up reaches the hook
@@ -588,6 +618,63 @@ the date, never where.
   list as a set.
 - No App private key exists before Phase 43, which is the first consumer. Both Apps
   are created with no key generated.
+
+### App installation read-back
+
+`repo-controls` reads each App installation's repository list from
+`GET user/installations/<id>/repositories`. That endpoint refuses the owner's `gh`
+token (HTTP 403: it needs a token authorized to the App), so plan 41-04 field 10
+chose DEVICE-FLOW: the owner mints a short-lived App user token and passes it to
+the row in one environment variable per App.
+
+- The variable is `REPO_CONTROLS_TOKEN_<SLUG>`: the App slug upper-cased, with `-`
+  turned into `_`. It is read for every installation, declared or undeclared:
+
+  | App | Owner | Variable |
+  |---|---|---|
+  | `powerbrowser-bot` | the org | `REPO_CONTROLS_TOKEN_POWERBROWSER_BOT` |
+  | `powerbrowser-clock` | the org | `REPO_CONTROLS_TOKEN_POWERBROWSER_CLOCK` |
+  | `slack` | third party | `REPO_CONTROLS_TOKEN_SLACK` |
+  | `claude` | third party | `REPO_CONTROLS_TOKEN_CLAUDE` |
+  | `cloudflare-workers-and-pages` | third party | `REPO_CONTROLS_TOKEN_CLOUDFLARE_WORKERS_AND_PAGES` |
+
+- With a variable unset, that list is read with the owner token, as before.
+- The token reaches exactly one `gh` child, as `GH_TOKEN` in that child's
+  environment. The row never prints, logs, caches, returns or writes it, and no
+  other read takes a token; the `--self-test` line naming
+  `REPO_CONTROLS_TOKEN_POWERBROWSER_BOT` proves both.
+- A run without the variables is red on the list reads by design. Each refused
+  read is a FAIL that names its variable and this subsection; it never skips and
+  never passes.
+
+Re-run procedure for the two Apps the org owns, from a terminal at the repository
+root. Repeat steps 1 to 4 for each App whose list read was refused:
+`powerbrowser-bot` with `REPO_CONTROLS_TOKEN_POWERBROWSER_BOT`, and
+`powerbrowser-clock` with `REPO_CONTROLS_TOKEN_POWERBROWSER_CLOCK`.
+
+1. App settings > General: tick "Enable Device Flow" and save. Copy the Client ID.
+   It is not the App ID. Generate no private key and no client secret.
+2. `curl -s -X POST -H 'Accept: application/json' -d client_id=<client id> https://github.com/login/device/code`
+   Note `device_code` and `user_code`.
+3. Open https://github.com/login/device, enter the `user_code`, and authorize.
+4. Only after authorizing, put the token into this shell without echoing it:
+   `export REPO_CONTROLS_TOKEN_POWERBROWSER_BOT="$(curl -s -X POST -H 'Accept: application/json' -d client_id=<client id> -d device_code=<device_code> -d grant_type=urn:ietf:params:oauth:grant-type:device_code https://github.com/login/oauth/access_token | node -pe 'JSON.parse(require("fs").readFileSync(0, "utf8")).access_token')"`
+   Use the clock variable for the clock App. The token expires after 8 hours.
+5. `scripts/verify-platform.sh --only repo-controls`. Expected:
+   `repo-controls: PASS`. If a list read is still refused, repeat steps 2 to 4 for
+   that App and run it again.
+6. `unset REPO_CONTROLS_TOKEN_POWERBROWSER_BOT REPO_CONTROLS_TOKEN_POWERBROWSER_CLOCK`.
+   Then on github.com > Settings > Applications > Authorized GitHub Apps, revoke
+   each App you authorized. This does not uninstall the App.
+
+Never paste a token into a reply, a file or an issue.
+
+The three third-party Apps (`slack`, `claude`, `cloudflare-workers-and-pages`;
+`app-cloudflare-workers-and-pages.json` has `"third_party": true`) cannot use
+device flow: only an App's owner can enable it, and the org does not own them.
+Their lists go green only with a token the owner supplies in the same variable
+form at the Phase 59 plan 59-04 checkpoint. Otherwise each of those list reads is
+re-dated under Phase 59 decision D-09 and stays red until then.
 
 ### Fixer authentication (FIX-12)
 
@@ -968,8 +1055,9 @@ Owner steps, at the 54-04 checkpoint (none of them is an agent's):
 `win11` with a 200704-byte stub qcow2 already exists on `legion`; leave it and its
 disk alone. The packaging capability record in `docs/BUILD.md` that says
 `virsh list --all` shows zero defined domains is stale: `win11` is defined and shut
-off on `legion`. Runner-user libvirt access is an owner action in `/etc/nixos`, taken at
-the 54-04 checkpoint. The guest is a test target, never a build host: the Windows build is a
+off on `legion`. `systemd/legion-pb.nix` enables libvirtd and does not put the runner user `pb-runner` in the
+`libvirtd` group, so no runner job reaches `qemu:///system`; `win-matrix-run.sh` calls `virsh`
+without `-c`, so whoever runs it sets `LIBVIRT_DEFAULT_URI=qemu:///system`. The guest is a test target, never a build host: the Windows build is a
 Linux cross-compile. Give the nvram `format='qcow2'` rather than raw, because
 libvirt refuses an internal snapshot for a pflash domain whose nvram is not qcow2,
 and the `clean-baseline` snapshot the matrix reverts to depends on it. The matrix reverts **once** and runs the
@@ -988,6 +1076,14 @@ BUILD_TARGET strings read off the running build, one N to N+1 hop from the writa
 location, the same launch from `/Applications` with what the updater does there,
 uninstall, and a residue check against real per-user paths. The macOS asset joins a
 Release only after that record exists and its gate is green.
+
+The session's Orca input is the two hosted `macos-orca-arm64` and `macos-orca-x64` artifacts.
+Each holds `tree.tar`, `BUILD_ROOT` and `SHA256SUMS` (68-CR-03): the staged Orca tree travels as
+one tar because an uploaded artifact keeps no file mode, and the executables inside it
+(node-pty's `spawn-helper`, the ripgrep binaries, agent-browser) need their executable bit.
+`package-macos.sh` admits an artifact against its job's `sums_sha256` output before it unpacks
+`tree.tar` with `tar -xpf`, and refuses an artifact without `tree.tar`. `docs/BUILD.md` ("Packaged Orca"
+and "macOS universal package") gives the full layout.
 
 ## Release tag pattern
 
@@ -1495,6 +1591,83 @@ make it before the window opens or list it in the record, and the issue leg cann
 observed until the live tracking-issue writer is wired (phase BLOCKED.md item 3), because
 today `report` prints the view without writing it.
 
+### Orca re-pin (OVL-02)
+
+Orca ships several releases a week. The release train moves the Orca pin (`[upstreams]
+orca_tag` and `orca_commit` in `configuration.toml`) to the newest Orca release once a
+week, re-applies PowerBrowser's seams, and proves the result before a PR exists. **Status:
+the jobs below are defined and fixture-tested; no hosted run has exercised them until the
+owner pushes main.**
+
+**The tick and the dispatch.** `sweep-clock` decides the weekly tick with
+`release-train.mjs --orca-due`: due on the first accepted daily sweep of each ISO week, and
+due when the previous sweep is unknown. There is no `schedule:` key. The owner runs it at
+once by dispatching the train with `repin-orca=true`.
+
+**Selection (`detect-orca`).** The job lists `git ls-remote --tags` of the remote named by
+the one `REMOTE=` line of `scripts/fetch-orca.sh`, and `detect-upstreams.mjs --orca-select`
+picks the newest tag matching `vX.Y.Z` exactly that is strictly newer than `orca_tag`,
+compared as integer triples (`v1.4.10` is newer than `v1.4.9`). `-rc.N`, `-rc.N.perf` and
+`mobile-*` tags never match. The commit is the peeled `^{}` line for an annotated tag, else
+the bare sha (Orca publishes both shapes). Only the newest tag is tried; intermediate tags
+are not walked. Two holds leave the outputs empty and print a `NOTE`: no newer tag, and an
+open same-repository PR whose head starts `chore/orca-`.
+
+**The replay (`rebase-orca`, `.github/workflows/rebase-orca.yml`).** A read-only job
+(`contents: read`, no persisted credential) runs
+`nix develop .#orca --command bash scripts/rebase-orca.sh --tag <tag> --commit <commit>`.
+It is the only place Orca's code runs. Each stage prints `rebase-orca: <stage>`; the first
+failure prints `rebase-orca: FAIL -- <stage> ...`, which becomes the job's `stage` output.
+A row or probe that prints `SKIP` is a failure inside the replay (the one exception is the
+licence row's SKIP for the absent Gecko tree `upstream/`, which this replay never fetches).
+
+| Stage line | What stopped | Human action |
+|---|---|---|
+| `pin-move` | the two pin lines did not move, or a stale `orca/` | check the `[upstreams]` line shapes; remove `orca/` |
+| `fetch` | the tag no longer resolves to the commit | re-run the selection; a moved tag is never fetched |
+| `seam-apply <patch>` | the seam patch does not apply onto the new tag | regenerate the seam against the tag, or rework it |
+| `build` | `build-orca.sh` failed (its log names the step) | fix the build step or the overlay it names |
+| `typecheck:web <file>:<line>`, `typecheck:node <file>:<line>` | Orca's own typecheck failed | fix the overlay file or seam at that location |
+| `typecheck coverage <path>` | an `orca-overlay/files` file is in neither typecheck program | place the file where Orca's program includes it |
+| `xpi cache` | `stage-bundled-xpi.sh` failed: the pinned add-on download no longer hashes to its pin (the stage downloads the pinned XPIs, sha256-checked and never executed, into `.mozbuild/bundled-xpi/` for the licence row's bundled leg) | read its `FAIL` line; a changed download needs a re-pin of `powerbrowser/packaging/bundled-xpi.json` |
+| `row orca-build-shape` / `row orca-overlay` / `row orca-overlay-built` | the build shape, or a seam over its line bound or cap | shrink or split the seam; rebuild |
+| `row licence-allowlist` | Orca's LICENSE changed, or a new package licence | add the row or ruling the licence needs |
+| `row orca-mobile-protocol` | an overlay path entered the protected mobile set | move the change out of the protected paths |
+| `row orca-mobile-skew` | the pin fell outside the mobile skew window | re-pin to a tag inside the window |
+| `row <label> skipped` | a row printed SKIP | provide what the row needs; a SKIP proves nothing |
+| `orcad-only start` | orcad did not start, bind, report the pinned Node, or reap | read the probe's FAIL line; this is the D-04 fallback decision |
+| `notices` | `generate-licensing.mjs --write-orca` failed or skipped | regenerate the notices locally and read its FAIL lines |
+| `brand scan` | a brand token in the tracked tree after the re-pin | re-measure with `node scripts/scan-brand-residue.mjs` |
+
+**The bump PR (`bump-pr-orca`).** Entered only when the stage is `replayed`, in the `bot`
+environment with `permissions: {}`. It re-checks the tag and commit by regex, then runs
+`rebase-orca.sh --replay-only` (pin lines, `fetch-orca.sh` with `TAG` and `COMMIT` exported,
+seam apply, regeneration and the `seams.json` blob rewrite: git and node over tracked data,
+no Orca code), stages exactly `configuration.toml`, `orca-overlay/patches`,
+`orca-overlay/seams.json` and `THIRD-PARTY-NOTICES.txt` and refuses any other change, commits,
+and only then mints the App token. It publishes `chore/orca-<tag>` through
+`publish-bump-branch.sh`, opens or updates the PR and arms `gh pr merge --auto --merge`.
+Auto-merge does not bypass `main-review`: the required check and the owner's approving
+review (or the owner's admin bypass) are still the human step. `verify-workflows.mjs`
+(`orca-repin`) refuses a bump job that mints before the replay, stages another path, runs
+Orca code or merges without `--auto`.
+
+**The notices carry (A-P1).** A re-pin that changes Orca's shipped package closure changes
+the Orca section of `THIRD-PARTY-NOTICES.txt`. The replay rewrites it
+(`generate-licensing.mjs --write-orca`) and uploads it as the `rebase-orca-notices` artifact,
+holding exactly that file. `bump-pr-orca` downloads this run's artifact only, refuses it
+unless it holds exactly `THIRD-PARTY-NOTICES.txt`, and copies it with
+`cp --remove-destination` before staging. The file was written by a job that ran Orca's build, so a
+bump that carries it says so in the PR body and does not arm auto-merge: the owner reads
+the notices diff before merging. To revert A-P1: make the `notices` stage a stop
+when the file changed, and drop `THIRD-PARTY-NOTICES.txt` from the bump's `git add` line
+and from `verify-workflows.mjs`'s expected set.
+
+**The stop issue.** A FAIL stage opens, edits or reopens one issue per candidate tag,
+titled `release-train: orca <tag> stopped`, from the `report` job, carrying the stage line
+and the run URL. No branch or PR is published and the pin stays. A dry run prints what a
+live run would write.
+
 ---
 
 ## Per-release procedure
@@ -1833,8 +2006,9 @@ owner-dispatched `--rollback-to` flag on the withdraw and descriptor path, which
 The runner is `github-runner-powerbrowser-release.service` on `legion`, maintained
 through `/etc/nixos/configuration.nix` and the `pkexec ... nrs` flow, never by
 editing the unit. It is non-ephemeral: it keeps its registration and its work directory
-`/var/lib/pb-runner` between jobs, so a stuck job is cleared by restarting the unit, and the
-work directory is removed only while the unit is stopped. Keep disk headroom for the objdirs a
+`/var/lib/pb-runner` between jobs, so a stuck job is cleared by restarting the unit. The module
+deletes the work directory's contents on every start, so a restart also drops the checkout and the
+objdirs inside it; the podman image store in `/var/lib/pb-runner-data` survives. Keep disk headroom for the objdirs a
 release build needs: `objdir/` peaks around 14 GB on top of the roughly 5.6 GB
 `upstream/` checkout, and a Windows or macOS target adds its own objdir. `sccache`
 is already configured in `.mozconfig` and in the `.#firefox` shell; stages
@@ -1852,8 +2026,10 @@ objdir, the N-plus-1 objdir used for the update hop, and the Windows and macOS t
 Provision about 62 GB of free disk for them before registering.
 
 1. Restore `/etc/nixos` from its git remote and apply it with the `pkexec ... nrs` flow. The
-   `services.github-runners` block is declarative, so the runner user `pb-runner`, the work
-   directory `/var/lib/pb-runner` and the pre-job hook come back with it.
+   `services.github-runners` block is declarative, so the runner user `pb-runner` and the pre-job
+   hook come back with it, and the tmpfiles rules in `systemd/legion-pb.nix` create the work
+   directory `/var/lib/pb-runner` and the podman store `/var/lib/pb-runner-data` (the module itself
+   creates neither).
 2. Create `/var/lib/secrets/github-runner-registration` from a fresh registration token (see
    "Runner registration through the `/etc/nixos` flow"). Old tokens are expired and a
    rebuilt host is a new registration; remove the stale runner entry from the repository's

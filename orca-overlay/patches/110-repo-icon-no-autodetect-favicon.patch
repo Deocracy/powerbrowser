@@ -1,0 +1,14 @@
+diff --git a/src/main/repository-icons/repo-icon-autodetect.ts b/src/main/repository-icons/repo-icon-autodetect.ts
+index 8d08dca624..0f1239279a 100644
+--- a/src/main/repository-icons/repo-icon-autodetect.ts
++++ b/src/main/repository-icons/repo-icon-autodetect.ts
+@@ -44,7 +44,8 @@ function packageHomepageIcon(packageJson: unknown): RepoIcon | null {
+     return null
+   }
+   const src = faviconUrlFromWebsite(homepage)
+-  return src ? { type: 'image', src, source: 'favicon', label: 'Website favicon' } : null
++  // No favicon host is contacted for an icon nobody picked.
++  return src?.startsWith('data:') ? { type: 'image', src, source: 'favicon', label: 'Website favicon' } : null
+ }
+ 
+ async function detectLocalPackageHomepageIcon(repoPath: string): Promise<RepoIcon | null> {

@@ -110,6 +110,9 @@ function toFinite(value: unknown, fallback: number): number {
     return Number.isFinite(n) ? n : fallback;
 }
 
+/** The last key `tabKeyOf` computed for each widget while it was alive. */
+const liveKeys = new WeakMap<Widget, string>();
+
 /**
  * NG-001: the one row-key rule, for every kind of tab (docs/TAB-STORE.md).
  * A web tab is keyed by its own identity (`WebTabWidget.rowKey`), never its
@@ -121,9 +124,21 @@ export function tabKeyOf(widget: Widget, registry: TabUriRegistry): string {
     if (widget instanceof WebTabWidget) {
         return widget.rowKey;
     }
+    // A `disposed` listener runs after WidgetManager's own, which has already
+    // dropped the widget's description, so the registry address is gone by
+    // then. Lumino sets isDisposed before it emits, so the key the widget had
+    // while alive is returned instead of the `widget:` fallback.
+    const last = liveKeys.get(widget);
+    if (widget.isDisposed && last !== undefined) {
+        return last;
+    }
     const address = registry.uriOf(widget) ?? (NavigatableWidget.is(widget) ? widget.getResourceUri() : undefined);
     const key = address?.toString(true);
-    return key && !/^(webview|https?):/i.test(key) ? key : `widget:${widget.id}`;
+    const result = key && !/^(webview|https?):/i.test(key) ? key : `widget:${widget.id}`;
+    if (!widget.isDisposed) {
+        liveKeys.set(widget, result);
+    }
+    return result;
 }
 
 @injectable()
@@ -284,14 +299,15 @@ export class GroupModel implements FrontendApplicationContribution {
      * counts as loose) and the active group's tabs.
      */
     showsInStrip(widget: Widget, current: Widget | undefined): boolean {
+        const key = this.keyOf(widget);
         // PAN-04 (A3): a tab of a group in its undo window is shown nowhere, current or not.
-        if (this.isClosingKey(this.keyOf(widget))) {
+        if (this.isClosingKey(key)) {
             return false;
         }
         if (!this.loaded || this.loadFailed || !this.activeGroupId || widget === current) {
             return true;
         }
-        const groupId = this.locateCard(this.keyOf(widget))?.groupId ?? null;
+        const groupId = this.locateCard(key)?.groupId ?? null;
         return groupId === null || groupId === this.activeGroupId;
     }
 
@@ -366,13 +382,16 @@ export class GroupModel implements FrontendApplicationContribution {
      * NG-005: closing a Theia tab that has a row marks the row closed. Widget
      * disposal is the user's close; a reload or quit disposes nothing, so the
      * row stays and the tab keeps its card.
-     * ponytail: finds the widget by scanning the main area, O(tabs); index by key if it shows up.
+     * A caller watching many tabs at once passes `byKey` (`mainWidgetsByKey`),
+     * so the main area is scanned once rather than once per tab.
      */
-    private watchClose(uri: string): void {
+    private watchClose(uri: string, byKey?: ReadonlyMap<string, Widget>): void {
         if (/^(web|stock):/.test(uri)) {
             return;
         }
-        const widget = [...this.shell.mainPanel.widgets()].find(candidate => this.keyOf(candidate) === uri);
+        const widget = byKey
+            ? byKey.get(uri)
+            : [...this.shell.mainPanel.widgets()].find(candidate => this.keyOf(candidate) === uri);
         if (!widget || this.watched.has(widget)) {
             return;
         }
@@ -381,6 +400,18 @@ export class GroupModel implements FrontendApplicationContribution {
             this.actor.mutate({ kind: 'closeTab', uri })
                 .catch(error => console.error('[@powerbrowser/modes] closing a tab row failed:', error));
         });
+    }
+
+    /** Every main-area widget by its row key, the first one winning as `watchClose`'s scan does. */
+    private mainWidgetsByKey(): Map<string, Widget> {
+        const byKey = new Map<string, Widget>();
+        for (const widget of this.shell.mainPanel.widgets()) {
+            const key = this.keyOf(widget);
+            if (!byKey.has(key)) {
+                byKey.set(key, widget);
+            }
+        }
+        return byKey;
     }
 
     /**
@@ -484,19 +515,18 @@ export class GroupModel implements FrontendApplicationContribution {
             // NG-012 (T3-R1): no per-read catch. A read failing mid-load fails
             // the whole load -- an empty member list would draw an empty box,
             // show its tabs as loose, and have Close Group confirm "0 tabs".
-            for (const group of parsed) {
-                const memberRows = await reader.getGroupTabs(group.id);
-                const tabs = Array.isArray(memberRows) ? memberRows.flatMap(row => {
-                    const tab = this.parseTab(row);
-                    return tab ? [tab] : [];
-                }) : [];
-                nextMembers.set(group.id, tabs);
-            }
-            const looseRows = await reader.listUngroupedTabs();
-            let loose: PanoramaTab[] = Array.isArray(looseRows) ? looseRows.flatMap(row => {
+            // The reads are independent, so they go out together: one round
+            // trip per load instead of one per group.
+            const [memberLists, looseRows] = await Promise.all([
+                Promise.all(parsed.map(group => reader.getGroupTabs(group.id))),
+                reader.listUngroupedTabs(),
+            ]);
+            const parseTabs = (tabRows: unknown): PanoramaTab[] => Array.isArray(tabRows) ? tabRows.flatMap(row => {
                 const tab = this.parseTab(row);
                 return tab ? [tab] : [];
             }) : [];
+            parsed.forEach((group, index) => nextMembers.set(group.id, parseTabs(memberLists[index])));
+            let loose: PanoramaTab[] = parseTabs(looseRows);
             // NG-009: every key the store holds a row for, open or not.
             this.stored.clear();
             for (const tabs of [...nextMembers.values(), loose]) {
@@ -523,7 +553,7 @@ export class GroupModel implements FrontendApplicationContribution {
                         const open = liveByUri.get(tab.uri);
                         if (open) {
                             claimed.add(tab.uri);
-                            return [{ ...tab, url: open.url || tab.url, title: open.title || tab.title, open: true }];
+                            return [{ ...tab, url: open.url || tab.url, title: open.title || tab.title, thumbnail: thumbnails.get(tab.uri) ?? null, open: true }];
                         }
                         // NG-007/NG-008: a grouped tab that is not open keeps its
                         // card -- its row is open or restorable -- and reopens from
@@ -549,9 +579,12 @@ export class GroupModel implements FrontendApplicationContribution {
                     });
                 }
                 loose = rest;
+                // Built on the first Theia tab to watch: web and stock tabs never scan.
+                let byKey: Map<string, Widget> | undefined;
                 for (const tab of live) {
-                    if (claimed.has(tab.uri) || placements.has(tab.uri)) {
-                        this.watchClose(tab.uri);
+                    if ((claimed.has(tab.uri) || placements.has(tab.uri)) && !/^(web|stock):/.test(tab.uri)) {
+                        byKey ??= this.mainWidgetsByKey();
+                        this.watchClose(tab.uri, byKey);
                     }
                 }
             }
@@ -726,8 +759,8 @@ export class GroupModel implements FrontendApplicationContribution {
             return;
         }
         const card = from.card;
-        const before = sameGroup && toGroupId !== null
-            ? (this.members.get(toGroupId) ?? []).findIndex(tab => tab.uri === uri)
+        const before = from.groupId !== null
+            ? (this.members.get(from.groupId) ?? []).findIndex(tab => tab.uri === uri)
             : undefined;
         const apply = (): void => {
             this.removeCardLocal(uri);
@@ -818,6 +851,7 @@ export class GroupModel implements FrontendApplicationContribution {
         }
         const removed = this.groups[index];
         const stragglers = [...(this.members.get(id) ?? [])];
+        const wasActive = this.activeGroupId === id;
         const apply = (): void => {
             this.groups = this.groups.filter(candidate => candidate.id !== id);
             this.members.delete(id);
@@ -830,11 +864,13 @@ export class GroupModel implements FrontendApplicationContribution {
         };
         const revert = (): void => {
             this.groups = [...this.groups.slice(0, index), removed, ...this.groups.slice(index)];
-            this.members.set(id, stragglers);
-            for (const tab of stragglers) {
-                this.removeCardLocal(tab.uri);
-            }
+            // Out of the loose list before the group is restored: removeCardLocal
+            // searches the groups first and would take them back out of this one.
             this.ungrouped = this.ungrouped.filter(tab => !stragglers.some(other => other.uri === tab.uri));
+            this.members.set(id, stragglers);
+            if (wasActive) {
+                this.activeGroupId = id;
+            }
         };
         await this.persist(`dissolve:${id}`, apply, revert, () => client.mutate({ kind: 'dissolveGroup', id }));
     }
@@ -1042,7 +1078,7 @@ export class GroupModel implements FrontendApplicationContribution {
         this.reopening.add(tab.uri);
         try {
             const target = new URI(web ? (tab.url || EMPTY_PAGE_URL) : tab.uri);
-            const options: WebTabOpenerOptions = web ? { rowKey: tab.uri } : { widgetOptions: { area: 'main' } } as WebTabOpenerOptions;
+            const options: WebTabOpenerOptions = web ? { rowKey: tab.uri, url: tab.url || EMPTY_PAGE_URL } : { widgetOptions: { area: 'main' } } as WebTabOpenerOptions;
             const opener = await this.openers.getOpener(target, options);
             await opener.open(target, options);
         } finally {
@@ -1087,26 +1123,30 @@ export class GroupModel implements FrontendApplicationContribution {
     private async persist(key: string, apply: () => void, revert: () => void, write: () => Promise<unknown>): Promise<void> {
         apply();
         this.changeEmitter.fire();
-        let slot = this.pendingWrites.get(key);
-        if (!slot) {
-            slot = { attempts: 0, revert, write };
-            if (this.pendingWrites.size >= GroupModel.PENDING_WRITES_MAX) {
-                const oldest = this.pendingWrites.keys().next();
-                if (!oldest.done) {
-                    this.pendingWrites.delete(oldest.value);
-                }
+        // One slot per call: an earlier same-key write still in flight must not
+        // clear this one's Retry entry when it lands, and Retry replays this write.
+        const slot = { attempts: this.pendingWrites.get(key)?.attempts ?? 0, revert, write };
+        this.pendingWrites.delete(key);
+        if (this.pendingWrites.size >= GroupModel.PENDING_WRITES_MAX) {
+            const oldest = this.pendingWrites.keys().next();
+            if (!oldest.done) {
+                this.pendingWrites.delete(oldest.value);
             }
-            this.pendingWrites.set(key, slot);
         }
+        this.pendingWrites.set(key, slot);
         try {
             await write();
-            this.pendingWrites.delete(key);
+            if (this.pendingWrites.get(key) === slot) {
+                this.pendingWrites.delete(key);
+            }
         } catch (error) {
             slot.attempts += 1;
             if (slot.attempts >= 2) {
                 revert();
                 this.changeEmitter.fire();
-                this.pendingWrites.delete(key);
+                if (this.pendingWrites.get(key) === slot) {
+                    this.pendingWrites.delete(key);
+                }
             }
             throw error;
         }

@@ -1,0 +1,24 @@
+diff --git a/src/renderer/src/lib/open-in-app-catalog.tsx b/src/renderer/src/lib/open-in-app-catalog.tsx
+index 648d6fba93..0b7f45ddf3 100644
+--- a/src/renderer/src/lib/open-in-app-catalog.tsx
++++ b/src/renderer/src/lib/open-in-app-catalog.tsx
+@@ -67,18 +67,5 @@ export function OpenInApplicationIcon({
+   size?: number
+ }): React.JSX.Element {
+   const preset = getOpenInAppPreset(application)
+-  if (preset) {
+-    return (
+-      <img
+-        src={`https://www.google.com/s2/favicons?domain=${preset.faviconDomain}&sz=64`}
+-        width={size}
+-        height={size}
+-        alt=""
+-        aria-hidden
+-        className={cn('shrink-0', preset.iconClassName)}
+-        style={{ borderRadius: 2 }}
+-      />
+-    )
+-  }
+-  return <AppWindow width={size} height={size} />
++  return <AppWindow width={size} height={size} className={cn('shrink-0', preset?.iconClassName)} />
+ }

@@ -39,16 +39,22 @@
 // Usage:
 //   node scripts/verify-release-identity.mjs
 //   node scripts/verify-release-identity.mjs --self-test
+//   node scripts/verify-release-identity.mjs --root=<dir>   (the self-test's SKIP control)
+//
+// A run that skipped a step (no upstream/ checkout) exits 77 after one SKIP line, printed last
+// (SKIP-PROTOCOL.md); exit 0 means every step ran.
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { releaseIdentity, resolveConfig } from './generate.mjs';
+import { SKIP_EXIT, verdictExit } from './lib/skip-verdict.mjs';
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const SELF = fileURLToPath(import.meta.url);
+const REPO_ROOT = resolve(dirname(SELF), '..');
 const NAME = 'release-identity';
 const MANIFEST_REL = 'configuration.toml';
 const VERSION_REL = 'powerbrowser/packaging/version/version.txt';
@@ -59,7 +65,7 @@ const RELEASE_TAG = /^v(\d+)\.(\d+)(?:\.(\d+))?-(\d+)$/;
 
 const args = process.argv.slice(2);
 for (const a of args) {
-    if (a !== '--self-test') {
+    if (a !== '--self-test' && !a.startsWith('--root=')) {
         console.error(`${NAME}: FAIL -- unknown argument '${a}'`);
         process.exit(2);
     }
@@ -114,7 +120,7 @@ function runChecks(root, overrides = {}) {
 
     // --- 2. the upstream milestone ------------------------------------------
     if (!existsSync(join(root, 'upstream'))) {
-        skipped.push(`step 2: no upstream/ checkout, so ${MILESTONE_REL} was not compared with the manifest pin`);
+        skipped.push(`step 2: no upstream/ checkout, so ${MILESTONE_REL} was not compared with the manifest pin. Next step: run scripts/fetch-upstream.sh, then re-run this check`);
     } else {
         const text = read(MILESTONE_REL);
         const last = text === null ? null : text.split('\n').map(l => l.trim()).filter(Boolean).pop() ?? null;
@@ -192,15 +198,15 @@ function runChecks(root, overrides = {}) {
 
 function main() {
     if (args.includes('--self-test')) return selfTest();
-    const { failures, skipped, notes, identity } = runChecks(REPO_ROOT);
-    for (const s of skipped) console.log(`${NAME}: SKIP -- ${s}`);
+    const rootArg = args.find(a => a.startsWith('--root='));
+    const { failures, skipped, notes, identity } = runChecks(rootArg ? resolve(rootArg.slice('--root='.length)) : REPO_ROOT);
     if (failures.length > 0) {
         console.error(`${NAME}: FAIL -- ${failures.length} problem(s) with the release identity.`);
         failures.forEach(f => console.error(`  ${f}`));
-        return 1;
     }
-    console.log(`${NAME}: PASS -- the release key ${identity.releaseKey} (ESR ${identity.esrVersion}) agrees with both version files; ${notes.join('; ')}`);
-    return 0;
+    const code = verdictExit(NAME, failures, skipped);
+    if (code === 0) console.log(`${NAME}: PASS -- the release key ${identity.releaseKey} (ESR ${identity.esrVersion}) agrees with both version files; ${notes.join('; ')}`);
+    return code;
 }
 
 function selfTest() {
@@ -232,6 +238,22 @@ function selfTest() {
             console.error(`${NAME}: --self-test FAIL -- the fixture repo is already red, so the planted-fault results would mean nothing:`);
             baseline.failures.forEach(f => console.error(`  ${f}`));
             return 1;
+        }
+
+        // SKIP control (SKIP-PROTOCOL.md rule 2): the main mode over the fixture repo, which has no upstream/,
+        // runs steps 1 and 3 to 5 and skips step 2, so it exits 77 with the SKIP line last and no PASS line.
+        // Run as a child with its output captured, so its SKIP line never lands in this self-test's output.
+        {
+            const r = spawnSync(process.execPath, [SELF, `--root=${tmp}`], { encoding: 'utf8' });
+            const lines = (r.stdout ?? '').split('\n').filter(l => l.trim() !== '');
+            const last = lines[lines.length - 1] ?? '';
+            if (r.status !== SKIP_EXIT || !last.startsWith(`${NAME}: SKIP -- step 2: no upstream/ checkout`)
+                || lines.some(l => l.includes(`${NAME}: PASS`)) || /: SKIP/.test(r.stderr ?? '')) {
+                console.error(`${NAME}: --self-test FAIL -- control: a tree without upstream/ did not exit 77 with the step 2 SKIP line last and no PASS line (status ${r.status}, last line ${JSON.stringify(last)})`);
+                failed += 1;
+            } else {
+                console.log('  control: a tree without upstream/ -> exit 77, the step 2 SKIP line last, no PASS line');
+            }
         }
 
         const neighbor = esrVersion.replace(/(\d+)$/, d => String(Number(d) + 1));
@@ -363,7 +385,7 @@ function selfTest() {
                 console.log(`  ${c.name}: red -- ${failures.find(f => f.includes(c.expect))}`);
             }
         }
-        summary = `${reds} planted fault(s) went red naming the file or tag, and ${greens} control(s) stayed green`;
+        summary = `${reds} planted fault(s) went red naming the file or tag, ${greens} control(s) stayed green, and a tree without upstream/ exits 77`;
     } finally {
         rmSync(tmp, { recursive: true, force: true });
     }

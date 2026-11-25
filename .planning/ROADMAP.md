@@ -434,7 +434,7 @@ Plans:
 **Source phase:** 27 (found in 39-15)
 **Deferred at:** 2026-11-07, v1.5 close-out residual (plan 39-19); product defect, the fix window closed at 39-18
 **Follow-ups:**
-- [ ] long-press Back: holding Back 600 ms and releasing on the pill leaves keyboard focus in the pill, so a real Escape is the pill's and the history menu stays open (3 of 3 headed real-input runs). Repro: `PB_REAL_INPUT=1 PB_LIVE_HEADED=1 node scripts/verify-nav-keys-live.mjs --scenario long-press`. Cause so far: the release on the pill moves focus there. Source: 27-UAT test 4. WINDOWS.md entry 27.
+- [x] (fixed in 59-03; headed real-input run green 2026-11-18, plan 59-06 Task 2; WINDOWS 27 fixed) long-press Back: holding Back 600 ms and releasing on the pill leaves keyboard focus in the pill, so a real Escape is the pill's and the history menu stays open (3 of 3 headed real-input runs). Repro: `PB_REAL_INPUT=1 PB_LIVE_HEADED=1 node scripts/verify-nav-keys-live.mjs --scenario long-press`. Cause so far: the release on the pill moves focus there. Source: 27-UAT test 4. WINDOWS.md entry 27.
 
 ### Phase 999.29: Residual — WINDOWS.md 28: page-tools crash-navigate flake (BACKLOG)
 
@@ -451,9 +451,9 @@ Plans:
 **Deferred at:** 2026-11-07, gate exclusions keyed to the entries below
 **Target:** v1.6 (Chris 2026-11-07)
 **Follow-ups:**
-- [ ] prompts-live-self-test: plant `allow-loads-frame-url` goes red on 'popup not adopted next to its opener' instead of its own failure, 2 of 3 runs. Repro: `scripts/verify-platform.sh --only prompts-live-self-test`. Cause so far: the 39-09 re-site (999.13) does not reach the plant's failure reliably. Source: 37-UAT test 17. WINDOWS.md entry 39.
-- [ ] ng067-frontend-errors-reach-telemetry: 'no frontend.uncaught-error event was sent', red 1 of 3. Repro: `scripts/verify-platform.sh --only ng067-frontend-errors-reach-telemetry`. Cause so far: not isolated. Source: no UAT test (NG-067). WINDOWS.md entry 42.
-- [ ] page-furniture-live-self-test: clean control 'Copy Image Link did not put the image URL on the clipboard', red 1 of 3. Repro: `scripts/verify-platform.sh --only page-furniture-live-self-test`. Cause so far: headless clipboard read-back timing. Source: 35-UAT test 6. WINDOWS.md entry 43.
+- [x] prompts-live-self-test: plant `allow-loads-frame-url` goes red on 'popup not adopted next to its opener' instead of its own failure, 2 of 3 runs. Repro: `scripts/verify-platform.sh --only prompts-live-self-test`. Cause so far: the 39-09 re-site (999.13) does not reach the plant's failure reliably. Source: 37-UAT test 17. WINDOWS.md entry 39. Fixed in Phase 59 (59-03, 863edd46).
+- [x] ng067-frontend-errors-reach-telemetry: 'no frontend.uncaught-error event was sent', red 1 of 3. Repro: `scripts/verify-platform.sh --only ng067-frontend-errors-reach-telemetry`. Cause so far: not isolated. Source: no UAT test (NG-067). WINDOWS.md entry 42. Fixed in Phase 59 (59-03, 4773189f).
+- [x] page-furniture-live-self-test: clean control 'Copy Image Link did not put the image URL on the clipboard', red 1 of 3. Repro: `scripts/verify-platform.sh --only page-furniture-live-self-test`. Cause so far: headless clipboard read-back timing. Source: 35-UAT test 6. WINDOWS.md entry 43. Fixed in Phase 59 (59-09, beab4276, f51a345a).
 
 ### Phase 999.31: Residual — v1.5 close-out full run: defects red at every run (BACKLOG)
 
@@ -462,12 +462,12 @@ Plans:
 **Deferred at:** 2026-11-07, v1.5 close-out residuals; the phase's fix window closed at 39-18
 **Target:** v1.6 (Chris 2026-11-07)
 **Follow-ups:**
-- [ ] verify-customize-inert: 'state 1 vs state 3 pixels identical, the CSS layer had no effect'. Repro: `scripts/verify-platform.sh --only verify-customize-inert`. Cause so far: the script writes `$XDG_CONFIG_HOME/powerbrowser/customize.css`; the supervised frontend may read another config dir. Source: no UAT test (CUST-01). WINDOWS.md entry 34.
-- [ ] start-failure-shows-error (MIG-04): the planted settings-folder failure is reported as 'waiting for the backend's readiness announcement'. Repro: `scripts/verify-platform.sh --only start-failure-shows-error`. Cause so far: the 3000 ms readiness backstop fires first. Source: no UAT test (MIG-04). WINDOWS.md entry 36.
-- [ ] pan04-undo-close-group-live (g): after the commit, focus is on a `.pb-org-new` element the probe does not resolve. Repro: `scripts/verify-platform.sh --only pan04-undo-close-group-live`. Cause so far: a second Organising widget instance or a stale probe handle. Source: no v1.5 UAT test (PAN-04). WINDOWS.md entry 37.
-- [ ] ng-023-suggestions-history-bookmarks: an open tab ranks below a bookmark match. Repro: `scripts/verify-platform.sh --only ng-023-suggestions-history-bookmarks`. Cause so far: provider order puts bookmarks first; not traced. Source: no UAT test (NG-023). WINDOWS.md entry 38.
-- [ ] site-identity-live app-menu: Organising rows 5-8 disabled, and Help opens no about:support stock window (the self-test's clean control fails the same way). Repro: `node scripts/verify-site-identity-live.mjs --scenario app-menu`. Cause so far: harness expectation or product not separated. Source: 31-04-LIVE-HANDOFF.md (phase 31 has no UAT sheet). WINDOWS.md entry 40.
-- [ ] first-boot-surface-fresh: `TypeError: can't access property "offsetHeight", additionalViewsMenu is null`. Repro: `scripts/verify-platform.sh --only first-boot-surface-fresh`. Cause so far: `@theia/core` SideTabBar overflow (tab-bars.js:1179) expects `.theia-additional-views-menu` beside the tab bar, and the top side-panel tabs (e9569e81) remove it; fix in the PB extension, never in Theia core. Source: no UAT test. WINDOWS.md entry 41.
+- [x] verify-customize-inert: 'state 1 vs state 3 pixels identical, the CSS layer had no effect'. Repro: `scripts/verify-platform.sh --only verify-customize-inert`. Cause so far: the script writes `$XDG_CONFIG_HOME/powerbrowser/customize.css`; the supervised frontend may read another config dir. Source: no UAT test (CUST-01). WINDOWS.md entry 34. Fixed in Phase 59 (59-03, dde3d2c6).
+- [x] start-failure-shows-error (MIG-04): the planted settings-folder failure is reported as 'waiting for the backend's readiness announcement'. Repro: `scripts/verify-platform.sh --only start-failure-shows-error`. Cause so far: the 3000 ms readiness backstop fires first. Source: no UAT test (MIG-04). WINDOWS.md entry 36. Fixed in Phase 59 (59-03, dde3d2c6).
+- [x] pan04-undo-close-group-live (g): after the commit, focus is on a `.pb-org-new` element the probe does not resolve. Repro: `scripts/verify-platform.sh --only pan04-undo-close-group-live`. Cause so far: a second Organising widget instance or a stale probe handle. Source: no v1.5 UAT test (PAN-04). WINDOWS.md entry 37. Fixed in Phase 59 (59-03, 6c13d3a9).
+- [x] ng-023-suggestions-history-bookmarks: an open tab ranks below a bookmark match. Repro: `scripts/verify-platform.sh --only ng-023-suggestions-history-bookmarks`. Cause so far: provider order puts bookmarks first; not traced. Source: no UAT test (NG-023). WINDOWS.md entry 38. Fixed in Phase 59 (59-03, 17d36026).
+- [x] site-identity-live app-menu: Organising rows 5-8 disabled, and Help opens no about:support stock window (the self-test's clean control fails the same way). Repro: `node scripts/verify-site-identity-live.mjs --scenario app-menu`. Cause so far: harness expectation or product not separated. Source: 31-04-LIVE-HANDOFF.md (phase 31 has no UAT sheet). WINDOWS.md entry 40. Fixed in Phase 59 (59-03, 266a8243).
+- [x] first-boot-surface-fresh: `TypeError: can't access property "offsetHeight", additionalViewsMenu is null`. Repro: `scripts/verify-platform.sh --only first-boot-surface-fresh`. Cause so far: `@theia/core` SideTabBar overflow (tab-bars.js:1179) expects `.theia-additional-views-menu` beside the tab bar, and the top side-panel tabs (e9569e81) remove it; fix in the PB extension, never in Theia core. Source: no UAT test. WINDOWS.md entry 41. Fixed in Phase 59 (59-03, 8a3b6e76).
 
 ### Phase 999.32: Residual — v1.5 close-out full run: owner and environment rows (BACKLOG)
 
@@ -478,7 +478,7 @@ Plans:
 - [ ] Ten release-artifact rows (ng063, portable-elf, sidecar-no-symlinks, package-target-natives, packaged-identity, install-matrix, ng065, ng072, search-engines-packaged, mar-update-hop). Repro: `scripts/verify-platform.sh --only portable-elf`. Cause so far: no container-built tarball and no N-plus-1 MAR hop; owner steps in `.planning/workstreams/deploy/OWNER-PASS.md`. Source: no UAT test. WINDOWS.md entry 30.
 - [ ] Seven live-state rows (ng074-ci-green-on-main, repo-controls, channel-live, codeberg-mirror-live, upptime-sweep-live, win-matrix-record, win-download-copy). Repro: `scripts/verify-platform.sh --only channel-live`. Cause so far: main not pushed, no Release, undeclared apps and slugs, no Windows matrix record. Source: no UAT test. WINDOWS.md entry 31.
 - [ ] macos-package-payload, macos-install-matrix: deferred to v1.7 (R4). Source: no UAT test. WINDOWS.md entry 32.
-- [ ] tel06-error-delivery-live refuses the dirty tree (the owner's `.claude/settings.json`, `.planning/state.json`); run it on a clean checkout. Source: no UAT test. WINDOWS.md entry 33.
+- [x] tel06-error-delivery-live refuses the dirty tree (the owner's `.claude/settings.json`, `.planning/state.json`); run it on a clean checkout. Source: no UAT test. WINDOWS.md entry 33. Fixed in Phase 59 (59-08, 4fb2771e, 93af17ee).
 - [ ] ng089-uat-sheets: 49 pending results plus no React 19 runtime test in the v1.2 and v1.3 UAT sheets; the NG-084 live pass was deferred by the owner. Repro: `node scripts/verify-ng-089-uat-sheets.mjs`. Source: those sheets. WINDOWS.md entry 35.
 
 ### Phase 999.33: Scenario-scoped gate exclusions (BACKLOG)

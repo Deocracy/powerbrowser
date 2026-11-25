@@ -1,0 +1,225 @@
+{
+  "route": "b-prime",
+  "measure": "all",
+  "command": "PB_FIREFOX_BIN=/home/chris/orca/workspaces/Power-Browser/v1.7-Orca-integration/objdir/dist/bin/powerbrowser flock /home/chris/coding/Power-Browser/.git/pb-live.lock node .planning/spikes/004-orca-pane-hosting/measure.mjs --route b-prime --measure all",
+  "startedAt": "2026-11-10T06:48:43.611Z",
+  "orcaVersion": "1.4.248",
+  "nodeVersion": "24.19.0",
+  "orcadNodeVersion": "24.19.0",
+  "orcadEndpoint": "ws://127.0.0.1:<port>",
+  "theiaBuild": "/home/chris/orca/workspaces/Power-Browser/p61-01/theia/applications/browser/lib/backend/main.js",
+  "theiaOrigin": "http://127.0.0.1:<port>",
+  "cssControl": {
+    "plantedGlobalRules": 1,
+    "counterDelta": 1,
+    "restoredAfterRemoval": true,
+    "theiaDocumentBefore": {
+      "global": 54,
+      "total": 7455,
+      "sheets": 8,
+      "unreadable": 0
+    }
+  },
+  "widgetInMainArea": true,
+  "reactCopies": 1,
+  "reactCopiesNote": "one bundled React per pane page; the observer in the Theia frame runs on the React of Theia (library bundle, externals)",
+  "xterms": 1,
+  "paneSize": {
+    "w": 1280,
+    "h": 695
+  },
+  "markerCount": 2,
+  "mounted": true,
+  "ws": "works",
+  "deviceKeySupport": "persistent",
+  "paneDocumentSecureContext": true,
+  "theia": {
+    "secureContext": true,
+    "cspHeader": null,
+    "cspMeta": null
+  },
+  "connectSrcRefusal": "none observed",
+  "observerInTheiaFrame": {
+    "ready": true,
+    "known": 2,
+    "sameUseState": true
+  },
+  "observeChannel": "second-client",
+  "observeTrigger": "the store new-terminal action (createNewTerminalTab) in the hosting client",
+  "observeLatencyMs": 74,
+  "observeToAddWidgetMs": 7,
+  "observeWithinOneSecond": true,
+  "observedPaneMounted": true,
+  "memory": {
+    "method": "ChromeUtils.requestProcInfo() through app.evaluateIn(app.chrome, ...), 5 s after each pane settled; sum of the parent and the children whose windows are on the Theia or orcad origin",
+    "samples": [
+      {
+        "label": "before the first pane",
+        "relevantBytes": 564699136,
+        "totalBytes": 687906816,
+        "processes": 9,
+        "rows": [
+          {
+            "type": "parent",
+            "memory": 179339264,
+            "origins": []
+          },
+          {
+            "type": "web",
+            "memory": 385359872,
+            "origins": [
+              "theia"
+            ]
+          }
+        ]
+      },
+      {
+        "label": "after pane 1",
+        "relevantBytes": 711028736,
+        "totalBytes": 832983040,
+        "processes": 10,
+        "rows": [
+          {
+            "type": "parent",
+            "memory": 188903424,
+            "origins": []
+          },
+          {
+            "type": "web",
+            "memory": 371068928,
+            "origins": [
+              "theia"
+            ]
+          },
+          {
+            "type": "webIsolated",
+            "memory": 151056384,
+            "origins": [
+              "orcad"
+            ]
+          }
+        ]
+      },
+      {
+        "label": "after pane 2",
+        "relevantBytes": 980963328,
+        "totalBytes": 1102983168,
+        "processes": 11,
+        "rows": [
+          {
+            "type": "parent",
+            "memory": 195526656,
+            "origins": []
+          },
+          {
+            "type": "web",
+            "memory": 477020160,
+            "origins": [
+              "theia"
+            ]
+          },
+          {
+            "type": "webIsolated",
+            "memory": 156700672,
+            "origins": [
+              "orcad"
+            ]
+          },
+          {
+            "type": "webIsolated",
+            "memory": 151715840,
+            "origins": [
+              "orcad"
+            ]
+          }
+        ]
+      },
+      {
+        "label": "after pane 3",
+        "relevantBytes": 1158356992,
+        "totalBytes": 1279348736,
+        "processes": 12,
+        "rows": [
+          {
+            "type": "parent",
+            "memory": 225918976,
+            "origins": []
+          },
+          {
+            "type": "web",
+            "memory": 481259520,
+            "origins": [
+              "theia"
+            ]
+          },
+          {
+            "type": "webIsolated",
+            "memory": 152973312,
+            "origins": [
+              "orcad"
+            ]
+          },
+          {
+            "type": "webIsolated",
+            "memory": 145735680,
+            "origins": [
+              "orcad"
+            ]
+          },
+          {
+            "type": "webIsolated",
+            "memory": 152469504,
+            "origins": [
+              "orcad"
+            ]
+          }
+        ]
+      }
+    ],
+    "firstPaneDeltaBytes": 146329600,
+    "totalDeltaBytes": 593657856,
+    "perPaneDeltaBytes": 197885952,
+    "laterPaneDeltaBytes": 223664128,
+    "lastPaneDeltaBytes": 177393664,
+    "totalAllProcessesDeltaBytes": 591441920,
+    "notMeasured": "the Theia backend (Node) and orcad are not Gecko processes and are outside this number"
+  },
+  "memoryPerPaneBytes": 197885952,
+  "cssLeakOut": {
+    "globalRulesAdded": 78,
+    "rulesAdded": 96,
+    "theiaDocumentCounterDelta": 78,
+    "unreadableSheetsAdded": 0,
+    "orcaSheet": null,
+    "computedStyleDiffs": 2,
+    "changed": [
+      {
+        "key": "html|class",
+        "before": "notranslate",
+        "after": "notranslate light"
+      },
+      {
+        "key": "html|style-attribute-length",
+        "before": "31349",
+        "after": "31457"
+      }
+    ]
+  },
+  "cssLeakIn": {
+    "computedStyleDiffs": 0,
+    "changed": [],
+    "comparedProperties": 144,
+    "controlDelta": 3,
+    "reference": "the same tab on a standalone pane page in a PB web tab"
+  },
+  "observeLatencyCliMs": 165,
+  "cliCreateBecameTab": true,
+  "secondClientSeesTab": true,
+  "closeLuminoOnlyLeavesOrcaTab": true,
+  "closeStaysClosed": true,
+  "closeCall": "store close action closeTerminalTab(tabId) in any paired client (the Theia-frame observer or a pane page), or the orcad RPC session.tabs.close; closing the web tab alone leaves the Orca tab open",
+  "closeObservedByChannel": true,
+  "orcadSurvivors": 0,
+  "finishedAt": "2026-11-10T06:49:33.083Z",
+  "verdict": "PASS"
+}

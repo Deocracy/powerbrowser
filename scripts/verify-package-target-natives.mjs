@@ -7,6 +7,16 @@
 // (`linux-x64` now; `win64` expects PE32+, `macos` expects Mach-O universal
 // later) so Phases H/I reuse it without a rewrite.
 //
+// The universe is judged by magic, not by name (Phase 68, P68-06): every regular
+// file whose first bytes are ELF (7f454c46), PE (4d5a) or Mach-O (feedfacf,
+// cffaedfe, cafebabe, feedface, cefaedfe -- the package-macos.sh magic_kind set),
+// plus every file named like a native (.node, rg, node, rg.exe, node.exe) whatever
+// its bytes. So Orca's agent-browser-<platform>-<arch>, node-pty's spawn-helper and
+// any helper without an extension are judged too. One exception, outside orca/
+// only: in a win64 stage uninstall/helper.exe (the one path the Mozilla package manifest
+// gives the NSIS uninstaller) is 32-bit by design and is not examined; every other PE, an
+// i386 .exe included, and every PE under orca/ must be PE32+ x86-64.
+//
 // Native paths are sorted before comparing, so output order is stable across
 // runs and filesystems. A staged package with zero natives is red naming the
 // EMPTY universe (staging dropped the sidecar), never green-by-absence; one
@@ -21,7 +31,7 @@
 //   node scripts/verify-package-target-natives.mjs [--target linux-x64]
 //   node scripts/verify-package-target-natives.mjs --self-test [--target linux-x64]
 
-import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -62,6 +72,25 @@ function isNativeName(name) {
     return name.endsWith('.node') || ['rg', 'node', 'rg.exe', 'node.exe'].includes(name);
 }
 
+const ELF = Buffer.from([0x7f, 0x45, 0x4c, 0x46]);
+const MZ = Buffer.from([0x4d, 0x5a]);
+const MACHO = ['feedfacf', 'cffaedfe', 'cafebabe', 'feedface', 'cefaedfe'];
+function hasNativeMagic(head) {
+    return head.length >= 4 && (head.subarray(0, 4).equals(ELF) || head.subarray(0, 2).equals(MZ) || MACHO.includes(head.subarray(0, 4).toString('hex')));
+}
+
+// The NSIS uninstaller (uninstall/helper.exe) is i386 by design; only that path, outside orca/, in a win64 stage. The path is
+// upstream/browser/installer/package-manifest.in's own line, @BINPATH@/uninstall/helper.exe, and the stage this check reads is
+// the application directory itself (package-windows.sh stages into it), so the path is anchored at the stage root. Any other
+// i386 .exe (a tool under the sidecar, a renamed helper, an uninstall/helper.exe in a nested directory) is examined and is red.
+export const INSTALLER_HELPER_PATH = /^uninstall\/helper\.exe$/;
+function isInstallerHelper(rel, head) {
+    if (rel.startsWith('orca/') || !INSTALLER_HELPER_PATH.test(rel)) return false;
+    if (head.length < 0x40 || !head.subarray(0, 2).equals(MZ)) return false;
+    const e = head.readUInt32LE(0x3c);
+    return e + 6 <= head.length && head.subarray(e, e + 4).equals(Buffer.from([0x50, 0x45, 0x00, 0x00])) && head.readUInt16LE(e + 4) === 0x014c;
+}
+
 // PE32+ x86-64 from the first 4096 bytes: MZ at 0, e_lfanew at 0x3C, "PE\0\0" there, machine 0x8664,
 // optional-header magic 0x020B. A file that cannot be read is never accepted.
 function peHeaderFailure(path, rel) {
@@ -89,6 +118,7 @@ function peHeaderFailure(path, rel) {
     return null;
 }
 
+// Every regular file with a native magic or a native name. Reads 4 bytes per file.
 function listNatives(root) {
     const out = [];
     const walk = (dir) => {
@@ -97,62 +127,46 @@ function listNatives(root) {
             let st;
             try { st = statSync(p); } catch { continue; }
             if (st.isDirectory()) walk(p);
-            else if (st.isFile() && isNativeName(basename(p))) out.push(p);
+            else if (st.isFile() && (isNativeName(n) || hasNativeMagic(magicOf(p, 4) ?? Buffer.alloc(0)))) out.push(p);
         }
     };
     walk(root);
     return out.sort();
 }
 
-// Windows stage only: any file, whatever its name, that starts with the ELF magic is a Linux native that
-// isNativeName does not reach (a .so, a helper without an extension). Reads 4 bytes per file.
-function listForeignElf(root) {
-    const out = [];
-    const walk = (dir) => {
-        for (const n of readdirSync(dir)) {
-            const p = join(dir, n);
-            let st;
-            try { st = statSync(p); } catch { continue; }
-            if (st.isDirectory()) walk(p);
-            else if (st.isFile() && st.size >= 4 && !isNativeName(n)) {
-                const head = magicOf(p, 4);
-                if (head && head.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) out.push(p);
-            }
-        }
-    };
-    walk(root);
-    return out.sort();
-}
-
+// The first `length` bytes (fewer for a shorter file), without reading the whole file; null when unreadable.
 function magicOf(path, length) {
+    let fd;
     try {
-        const buf = readFileSync(path);
-        return buf.subarray(0, length);
+        fd = openSync(path, 'r');
+        const buf = Buffer.alloc(length);
+        return buf.subarray(0, readSync(fd, buf, 0, length, 0));
     } catch {
         return null;
+    } finally {
+        if (fd !== undefined) closeSync(fd);
     }
 }
 
 function checkTree(root, targetId) {
     const spec = TARGETS[targetId];
-    const natives = listNatives(root);
+    const relOf = (p) => (p.startsWith(`${root}/`) ? p.slice(root.length + 1) : p);
+    const natives = listNatives(root).filter((p) => !(spec.pe && isInstallerHelper(relOf(p), magicOf(p, 4096) ?? Buffer.alloc(0))));
     // EMPTY-universe branch: zero natives is red (staging dropped the
     // sidecar), never green-by-absence.
     if (natives.length === 0) {
-        return { failures: [`EMPTY native universe under ${root} -- no .node, rg or node binary found (staging dropped the sidecar?)`], natives: 0 };
+        return { failures: [`EMPTY native universe under ${root} -- no ELF, PE or Mach-O file and no .node, rg or node name found (staging dropped the sidecar?)`], natives: 0 };
     }
     const failures = [];
-    if (spec.pe) {
-        for (const elf of listForeignElf(root)) {
-            const rel = elf.startsWith(`${root}/`) ? elf.slice(root.length + 1) : elf;
-            failures.push(`${rel}: ELF magic in a Windows stage -- a Linux native that carries no .node, rg or node name (--target ${targetId} expects PE32+ or no native at all)`);
-        }
-    }
     for (const native of natives) {
-        const rel = native.startsWith(`${root}/`) ? native.slice(root.length + 1) : native;
+        const rel = relOf(native);
         const head = magicOf(native, 20);
         if (!head || head.length < 4) {
             failures.push(`${rel}: truncated magic (fewer than 4 bytes) -- expected ${spec.label}, never merged or accepted`);
+            continue;
+        }
+        if (spec.pe && head.subarray(0, 4).equals(ELF)) {
+            failures.push(`${rel}: ELF magic in a Windows stage -- magic 7f454c46 is not PE32+ for --target ${targetId} (a Linux native, whatever its name)`);
             continue;
         }
         if (!head.subarray(0, spec.magic.length).equals(spec.magic)) {
@@ -319,16 +333,77 @@ function selfTest() {
                     console.log(`${NAME}: --self-test -- ${file} REJECTED: ${hit}`);
                 }
             }
+            // Positive control: the NSIS uninstaller at its own path is the one i386 .exe that is not examined.
             const exeDir = join(dir, 'exe-names');
-            mkdirSync(exeDir, { recursive: true });
-            writeFileSync(join(exeDir, 'uninstall-helper.exe'), mkPe({ machine: 0x014c }));
+            mkdirSync(join(exeDir, 'uninstall'), { recursive: true });
+            writeFileSync(join(exeDir, 'uninstall', 'helper.exe'), mkPe({ machine: 0x014c }));
             const exeRes = checkTree(exeDir, 'win64');
-            if (exeRes.failures.some((f) => f.includes('uninstall-helper.exe')) || !exeRes.failures.some((f) => f.includes('EMPTY native universe'))) {
-                console.error(`${NAME}: --self-test FAIL -- a 32-bit NSIS-style .exe was examined; only node.exe and rg.exe are Windows natives here (the installer's helper.exe is PE32 by design)`);
+            if (exeRes.failures.some((f) => f.includes('helper.exe')) || !exeRes.failures.some((f) => f.includes('EMPTY native universe'))) {
+                console.error(`${NAME}: --self-test FAIL -- uninstall/helper.exe (PE32 by design) was examined: ${exeRes.failures.join(' | ') || 'no failure at all'}`);
                 ok = false;
             } else {
-                console.log(`${NAME}: --self-test -- a 32-bit NSIS-style .exe is deliberately not examined (EMPTY universe reported)`);
+                console.log(`${NAME}: --self-test -- uninstall/helper.exe, 32-bit by design, is deliberately not examined (EMPTY universe reported)`);
             }
+            // Negative controls (harness-other-09): an i386 .exe anywhere else outside orca/ is examined and red.
+            for (const rel of ['sidecar/lib/foo.exe', 'uninstall-helper.exe', 'uninstall/other.exe', 'extras/uninstall/helper.exe.bak.exe', 'helper.exe', 'theia/node_modules/x/uninstall/helper.exe', 'extras/uninstall/helper.exe']) {
+                const negDir = join(dir, `exe-neg-${rel.replace(/[^a-z0-9]/gi, '-')}`);
+                mkdirSync(dirname(join(negDir, rel)), { recursive: true });
+                writeFileSync(join(negDir, rel), mkPe({ machine: 0x014c }));
+                const neg = checkTree(negDir, 'win64');
+                if (neg.failures.some((f) => f.startsWith(`${rel}:`) && f.includes('is not x86-64'))) {
+                    console.log(`${NAME}: --self-test -- an i386 ${rel} outside orca/ is REJECTED (only uninstall/helper.exe at the stage root is exempt)`);
+                } else {
+                    console.error(`${NAME}: --self-test FAIL -- an i386 ${rel} outside orca/ was NOT rejected naming 'is not x86-64': ${neg.failures.join(' | ') || 'no failure at all'}`);
+                    ok = false;
+                }
+            }
+        }
+
+        // Phase 68 (P68-06): the magic universe under orca/. Each fixture carries a name the old name-based
+        // universe never reached; a universal Mach-O control under orca/ must stay green for --target macos.
+        {
+            const put = (root, rel, bytes) => { mkdirSync(dirname(join(root, rel)), { recursive: true }); writeFileSync(join(root, rel), bytes); };
+            const thinArm = Buffer.alloc(0x40);
+            thinArm.write('cffaedfe', 0, 'hex');
+            thinArm.writeUInt32LE(0x0100000c, 4);
+            const fat = Buffer.alloc(0x40);
+            fat.write('cafebabe00000002', 0, 'hex');
+            const elfExec = Buffer.alloc(0x40);
+            Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01]).copy(elfExec);
+            elfExec.writeUInt16LE(2, 16); // ET_EXEC, as node-pty's spawn-helper
+            const pe32 = Buffer.alloc(0x200);
+            pe32[0] = 0x4d;
+            pe32[1] = 0x5a;
+            pe32.writeUInt32LE(0x80, 0x3c);
+            pe32.write('PE\0\0', 0x80, 'latin1');
+            pe32.writeUInt16LE(0x014c, 0x84);
+            pe32.writeUInt16LE(0x010b, 0x98);
+            const cases = [
+                ['macos', 'orca/out/orcad/agent-browser-darwin-arm64', thinArm, 'is not Mach-O universal'],
+                ['win64', 'orca/out/orcad/node_modules/node-pty/build/Release/spawn-helper', elfExec, 'ELF magic in a Windows stage'],
+                ['win64', 'orca/out/orcad/helper.exe', pe32, 'is not x86-64'],
+            ];
+            const ctlDir = join(dir, 'orca-macos-control');
+            put(ctlDir, 'orca/out/orcad/agent-browser-darwin-arm64', fat);
+            const ctl = checkTree(ctlDir, 'macos');
+            if (ctl.failures.length !== 0 || ctl.natives !== 1) {
+                console.error(`${NAME}: --self-test FAIL -- an unnamed universal Mach-O under orca/ is not exactly one green native: ${ctl.failures.join(' | ') || `${ctl.natives} natives`}`);
+                ok = false;
+            } else {
+                console.log(`${NAME}: --self-test -- an unnamed universal Mach-O under orca/ is GREEN for --target macos (judged by magic)`);
+            }
+            cases.forEach(([t, rel, bytes, fragment], i) => {
+                const d = join(dir, `orca-plant-${i}`);
+                put(d, rel, bytes);
+                const res = checkTree(d, t);
+                const hit = res.failures.find((f) => f.startsWith(`${rel}:`) && f.includes(fragment));
+                if (!hit) {
+                    console.error(`${NAME}: --self-test FAIL -- ${rel} (--target ${t}) was NOT rejected naming '${fragment}': ${res.failures.join(' | ') || '(green)'}`);
+                    ok = false;
+                } else {
+                    console.log(`${NAME}: --self-test -- ${rel} (--target ${t}) REJECTED: ${hit}`);
+                }
+            });
         }
 
         // Ordering probe: two runs list natives in the same sorted order.

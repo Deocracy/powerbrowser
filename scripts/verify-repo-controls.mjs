@@ -20,7 +20,11 @@
 //  4. App scope (R10). An org App no app-*.json declares counts only when it
 //     can reach a repository the declared Apps are installed on (selection all,
 //     or a repository list touching that derived set); an App kept off those
-//     repositories is ignored, and an unreadable repository list is red.
+//     repositories is ignored, and an unreadable repository list is red. The
+//     list for App <slug> is read with the token in REPO_CONTROLS_TOKEN_<SLUG>
+//     (upper-cased, '-' to '_') when that variable is set, and with the owner
+//     token otherwise (DEVICE-FLOW, plan 41-04 field 10; docs/RELEASING.md
+//     "App installation read-back").
 //  5. Fail closed. A non-2xx response, a missing or unauthenticated gh, or
 //     unparseable JSON is a FAIL naming the endpoint and the next step, never
 //     a SKIP and never a PASS.
@@ -64,11 +68,12 @@ const NEXT_AUTH = 'Next step: run gh auth status; the row needs scopes repo and 
 
 // A read that failed carries what a control may map: status 404 for an HTTP 404, empty true for a 2xx with no body
 // (a 204). Both stay unreadable unless the control opts in with liveFrom (dependabot-alerts, whose answer is the status).
-export function ghGet(path, exec = execFileSync) {
+// A token rides only in this one child's environment, as GH_TOKEN; it is never in argv, a why string or the result.
+export function ghGet(path, exec = execFileSync, token) {
     let out;
     try {
         out = exec('gh', ['api', '-H', API_VERSION_HEADER, path],
-            { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024 });
+            { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024, ...(token ? { env: { ...process.env, GH_TOKEN: token } } : {}) });
     } catch (e) {
         const first = String(e.stderr || e.message).trim().split('\n')[0];
         return { ok: false, status: /\(HTTP 404\)/.test(first) ? 404 : null, why: `GET ${path} could not be read (${first}). ${NEXT_AUTH}` };
@@ -81,14 +86,16 @@ export function ghGet(path, exec = execFileSync) {
 }
 
 // Every getter, real or planted, goes through this: a throw, a malformed
-// result and a truncated list are each unreadable, never green.
+// result and a truncated list are each unreadable, never green. opts carries
+// { token } to the getter; the cache key stays the path alone (each App's list
+// path is read once, so no read is answered from another token's result).
 function safeGetter(get) {
     const cache = new Map();
-    return (path) => {
+    return (path, opts) => {
         if (cache.has(path)) return cache.get(path);
         let r;
         try {
-            r = get(path);
+            r = get(path, opts);
         } catch (e) {
             r = { ok: false, why: `GET ${path} could not be read (${String(e?.message ?? e).split('\n')[0]}). ${NEXT_AUTH}` };
         }
@@ -415,6 +422,9 @@ function planRuleset(c, declared, ctx) {
 
 const ADMINS_PATH = 'orgs/{org}/members?role=admin&per_page=100';
 const APP_REPOS_PATH = 'user/installations/{id}/repositories?per_page=100';
+// The owner token cannot list an installation's repositories (HTTP 403), so each App list read takes this variable.
+const tokenVar = (slug) => `REPO_CONTROLS_TOKEN_${slug.toUpperCase().replace(/-/g, '_')}`;
+const READ_BACK = (slug) => `Next step: set ${tokenVar(slug)} to a user token for App ${slug}, as docs/RELEASING.md "App installation read-back" describes, then re-run.`;
 const OWNER_STEP = 'the owner does this in the GitHub UI at plan 41-04 (node scripts/apply-repo-controls.mjs prints the step)';
 const setDiff = (want, got) => ({ missing: want.filter(x => !got.includes(x)), extra: got.filter(x => !want.includes(x)) });
 
@@ -444,9 +454,9 @@ function compareApps(c, declared, live, ctx) {
     for (const i of list) {
         if (apps.some(a => a.slug === i.app_slug) || i.repository_selection === 'all') { inScope.push(i); continue; }
         const path = APP_REPOS_PATH.replace('{id}', i.id);
-        const r = ctx.get(path);
+        const r = ctx.get(path, { token: ctx.env[tokenVar(i.app_slug)] });
         if (!r.ok || !Array.isArray(r.body?.repositories)) {
-            f.push(`${c.id}: App ${i.app_slug} is undeclared and its repository list (GET ${path}) could not be read, so it cannot be shown to stay off ${[...protectedRepos].join(', ')} (GH-10, R10). Next step: plan 41-04 Task 2 step 9 probes whether the owner token can read installation repository lists.`);
+            f.push(`${c.id}: App ${i.app_slug} is undeclared and its repository list (GET ${path}) could not be read, so it cannot be shown to stay off ${[...protectedRepos].join(', ')} (GH-10, R10). ${READ_BACK(i.app_slug)}`);
             continue;
         }
         if (r.body.repositories.some(x => protectedRepos.has(x.name))) inScope.push(i);
@@ -472,9 +482,9 @@ function compareApps(c, declared, live, ctx) {
             f.push(`${w}: App ${a.slug} repository_selection is ${show(inst.repository_selection)} live but ${show(a.repository_selection)} declared. Next step: ${OWNER_STEP}.`);
         }
         const path = APP_REPOS_PATH.replace('{id}', inst.id);
-        const r = ctx.get(path);
+        const r = ctx.get(path, { token: ctx.env[tokenVar(a.slug)] });
         if (!r.ok) {
-            f.push(`${w}: ${r.why} Next step: plan 41-04 Task 2 step 9 probes whether the owner token can read installation repository lists.`);
+            f.push(`${w}: ${r.why} ${READ_BACK(a.slug)}`);
             continue;
         }
         if (!Array.isArray(r.body?.repositories)) {
@@ -897,8 +907,8 @@ function context(root, overrides, failures) {
         failures.push(e.message);
     }
     const bodies = loadBodies(root, overrides, failures);
-    const get = safeGetter(overrides.get ?? ghGet);
-    return { root, config, slug, bodies, get, fill: (tpl) => fill(tpl, slug) };
+    const get = safeGetter(overrides.get ?? ((path, opts) => ghGet(path, execFileSync, opts?.token)));
+    return { root, config, slug, bodies, get, env: overrides.env ?? process.env, fill: (tpl) => fill(tpl, slug) };
 }
 
 export function runChecks(root, overrides = {}) {
@@ -1119,7 +1129,8 @@ function selfTest() {
     }
     const base = fakeState(ctx);
     const listed = listSettingsDir(REPO_ROOT);
-    const fixed = { config: ctx.config, listSettings: () => listed, tags: ['v1.0', 'v1.4'] };
+    // env {}: no plant sees a REPO_CONTROLS_TOKEN_* the owner's shell may hold.
+    const fixed = { config: ctx.config, listSettings: () => listed, tags: ['v1.0', 'v1.4'], env: {} };
     const run = (extra) => runChecks(REPO_ROOT, { ...fixed, get: getterOf(base), ...extra });
     const mutated = (mutate) => {
         const s = clone(base);
@@ -1188,7 +1199,7 @@ function selfTest() {
         ['an undeclared other-app holding workflows', withInstallation({ app_slug: 'other-app', permissions: { metadata: 'read', workflows: 'write' } }), ['other-app', 'Workflows']],
         ['an undeclared App selected on homebrew-tap', withInstallation({ app_slug: 'slack', permissions: { metadata: 'read' } }, ['website', 'homebrew-tap']), ['slack', 'undeclared']],
         ['an undeclared App with repository_selection all', withInstallation({ app_slug: 'slack', repository_selection: 'all', permissions: { metadata: 'read' } }, []), ['slack', 'undeclared']],
-        ['an undeclared selected App with an unreadable repository list', withInstallation({ app_slug: 'claude', permissions: { metadata: 'read' } }, null), ['claude', 'could not be read']],
+        ['an undeclared selected App with an unreadable repository list', withInstallation({ app_slug: 'claude', permissions: { metadata: 'read' } }, null), ['claude', 'could not be read', 'REPO_CONTROLS_TOKEN_CLAUDE', 'App installation read-back']],
         ['an undeclared App holding workflows selected on powerbrowser-updates', withInstallation({ app_slug: 'claude', permissions: { metadata: 'read', workflows: 'write' } }, ['powerbrowser-updates']), ['claude', 'Workflows']],
         ['a neighbouring slug powerbrowser-bot-dev', withInstallation({ app_slug: 'powerbrowser-bot-dev', permissions: { metadata: 'read' } }), ['powerbrowser-bot-dev', 'undeclared']],
         ['the clock installation removed', mutated((s, p) => {
@@ -1201,7 +1212,7 @@ function selfTest() {
         ['a bot repository list without homebrew-tap', reposMut(0, (l) => { l.repositories = l.repositories.filter(r => r.name !== 'homebrew-tap'); l.total_count -= 1; }), ['powerbrowser-bot', 'declared repository homebrew-tap']],
         ['an empty clock repository list', reposMut(1, (l) => { l.repositories = []; l.total_count = 0; }), ['powerbrowser-clock', 'declared repository powerbrowser']],
         ['clock permissions gaining checks read', instMut('powerbrowser-clock', (i) => { i.permissions.checks = 'read'; }), ['powerbrowser-clock', 'permissions']],
-        ['a refused bot repository-list read', mutated((s) => { delete s[APP_REPOS_PATH.replace('{id}', FAKE_INSTALLATION_ID)]; }), [`user/installations/${FAKE_INSTALLATION_ID}/repositories`, 'could not be read']],
+        ['a refused bot repository-list read', mutated((s) => { delete s[APP_REPOS_PATH.replace('{id}', FAKE_INSTALLATION_ID)]; }), [`user/installations/${FAKE_INSTALLATION_ID}/repositories`, 'could not be read', 'REPO_CONTROLS_TOKEN_POWERBROWSER_BOT', 'App installation read-back']],
         ['org 2FA not required', set('orgs/{org}', 'two_factor_requirement_enabled', false), ['org (', 'two_factor_requirement_enabled']],
         ['an extra org owner', mutated((s, p) => { s[p(ADMINS_PATH)].push({ login: 'planted-owner', id: 7, type: 'User' }); }), ['org (', 'planted-owner']],
         ['a declared owner missing', mutated((s, p) => { s[p(ADMINS_PATH)] = []; }), ['org (', `declared owner ${ctx.bodies['org.json'].owners[0]}`]],
@@ -1294,6 +1305,24 @@ function selfTest() {
         }
     }
 
+    // DEVICE-FLOW (41-04 field 10): a planted bot token reaches the getter for the bot installation's repositories path
+    // and for no other path; every other read carries no token.
+    {
+        const botVar = tokenVar('powerbrowser-bot');
+        const planted = 'planted-bot-token';
+        const botPath = APP_REPOS_PATH.replace('{id}', FAKE_INSTALLATION_ID);
+        const seen = [];
+        const served = getterOf(base);
+        const { failures } = run({ env: { [botVar]: planted }, get: (path, opts) => { seen.push([path, opts?.token]); return served(path); } });
+        const wrong = seen.filter(([p, t]) => (p === botPath ? t !== planted : t !== undefined)).map(([p, t]) => `${p} (${t === undefined ? 'no token' : 'a token'})`);
+        if (failures.length === 0 && seen.some(([p]) => p === botPath) && wrong.length === 0) {
+            console.log(`  ok  ${botVar} set -> its token reaches only GET ${botPath}; the ${seen.length - 1} other read(s) carry none`);
+        } else {
+            console.error(`${NAME}: --self-test FAIL -- ${botVar} set: ${wrong.length > 0 ? `wrong token on ${wrong.join(', ')}` : `the bot list was not read with it, or the run went red: ${failures.join(' | ')}`}`);
+            failed += 1;
+        }
+    }
+
     // ghGet and the alerts mapping, through the real code with an injected exec (no gh, no network): 204 is on, a 404 is off,
     // and every other failure (a 403, a 500, text that is not JSON) stays unreadable, never "off" and never green.
     {
@@ -1321,6 +1350,19 @@ function selfTest() {
         const plain = ghGet('repos/o/r/other', () => '');
         if (plain.ok) {
             console.error(`${NAME}: --self-test FAIL -- ghGet read an empty body as a success without liveFrom`);
+            failed += 1;
+        }
+        // A token reaches the one gh child as GH_TOKEN, never in argv or the result (a refusal here); no token leaves env alone.
+        const secret = 'planted-gh-token';
+        const calls = [];
+        const record = (fail) => (cmd, args, opts) => { calls.push({ args, opts }); if (fail) throw Object.assign(new Error('gh exited 1'), { stderr: 'gh: Forbidden (HTTP 403)\n' }); return '{}'; };
+        const refused = ghGet('user/installations/1/repositories', record(true), secret);
+        ghGet('user/installations/1/repositories', record(false));
+        const [withToken, without] = calls;
+        if (withToken.opts.env?.GH_TOKEN === secret && !withToken.args.join(' ').includes(secret) && !JSON.stringify(refused).includes(secret) && without.opts.env === undefined) {
+            console.log('  ok  ghGet with a token -> GH_TOKEN in that child\'s env only, not in argv or the result; without one -> env inherited');
+        } else {
+            console.error(`${NAME}: --self-test FAIL -- ghGet token handling: GH_TOKEN ${withToken.opts.env?.GH_TOKEN === secret ? 'set' : 'not set'}, argv or result ${!withToken.args.join(' ').includes(secret) && !JSON.stringify(refused).includes(secret) ? 'clean' : 'carries it'}, untokened env ${without.opts.env === undefined ? 'inherited' : 'replaced'}`);
             failed += 1;
         }
     }

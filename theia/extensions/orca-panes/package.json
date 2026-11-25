@@ -1,0 +1,27 @@
+{
+  "private": true,
+  "name": "@powerbrowser/orca-panes",
+  "version": "0.1.0",
+  "license": "MIT",
+  "dependencies": {
+    "@powerbrowser/modes": "0.1.0",
+    "@powerbrowser/orca-browser": "0.1.0",
+    "@powerbrowser/tab-uris": "0.1.0",
+    "@powerbrowser/token-gate": "0.1.0",
+    "@theia/core": "1.76.0"
+  },
+  "theiaExtensions": [
+    {
+      "frontend": "lib/browser/orca-panes-frontend-module",
+      "backend": "lib/node/orca-panes-backend-module"
+    }
+  ],
+  "files": [
+    "lib",
+    "src"
+  ],
+  "scripts": {
+    "clean": "rm -rf lib *.tsbuildinfo",
+    "build": "tsc -b"
+  }
+}
