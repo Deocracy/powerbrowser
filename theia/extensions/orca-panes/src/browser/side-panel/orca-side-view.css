@@ -7,11 +7,6 @@
  * is not, so without the first rule its node is a viewport tall and Orca's footer row falls below the
  * part.
  */
-/* Orca's own text colour inside its panes: Theia's widget colour would be inherited over Orca's background. */
-.pb-orca-pane-host {
-  color: var(--foreground);
-}
-
 .pb-orca-side-view {
   height: 100%;
 }

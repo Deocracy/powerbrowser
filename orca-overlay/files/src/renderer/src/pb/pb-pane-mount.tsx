@@ -1018,6 +1018,8 @@ export function mountPane(element: HTMLElement, pick: PanePick, activity: PaneAc
       <div
         key={`pb-orca-pane-${mountSequence}`}
         data-pb-orca-pane-root={pick.kind}
+        // Orca's own text colour: Theia's widget colour would be inherited over Orca's background.
+        className="text-foreground"
         data-pb-orca-terminal-tab={pick.kind === 'terminal' ? pick.tabId : undefined}
         style={{ position: 'relative', display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: 0 }}
       >
