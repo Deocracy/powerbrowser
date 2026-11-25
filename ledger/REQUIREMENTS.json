@@ -1,5 +1,5 @@
 {
-  "ledger_version": 432,
+  "ledger_version": 433,
   "frozen_at": "2026-09-27",
   "items": [
     {
@@ -1006,7 +1006,7 @@
     {
       "id": "NG-078",
       "text": "A release pipeline exists, per docs/RELEASING.md and SEED-001. Evidence: RELEASING.md:11-12; SEED-001 dormant; no release.yml.",
-      "status": "deferred-requested",
+      "status": "deferred-approved",
       "spec_ref": "docs/non-gui/GAPS.md:108",
       "test_ref": "scripts/verify-release-shape.mjs::release-shape",
       "code_ref": "",
