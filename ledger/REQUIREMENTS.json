@@ -1,5 +1,5 @@
 {
-  "ledger_version": 434,
+  "ledger_version": 435,
   "frozen_at": "2026-09-27",
   "items": [
     {
@@ -1032,7 +1032,7 @@
     {
       "id": "NG-080",
       "text": "A production crash-ingest host receives reports. Evidence: collector is loopback only (scripts/crash-collector.mjs:27, 89, 343).",
-      "status": "deferred-requested",
+      "status": "deferred-approved",
       "spec_ref": "docs/non-gui/GAPS.md:110",
       "test_ref": "scripts/verify-worker-submit.mjs::crash-submit",
       "code_ref": "",
