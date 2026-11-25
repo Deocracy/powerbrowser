@@ -1,5 +1,5 @@
 {
-  "ledger_version": 433,
+  "ledger_version": 434,
   "frozen_at": "2026-09-27",
   "items": [
     {
@@ -1019,7 +1019,7 @@
     {
       "id": "NG-079",
       "text": "updates.powerbrowser.org serves updates. Evidence: no DNS record.",
-      "status": "deferred-requested",
+      "status": "deferred-approved",
       "spec_ref": "docs/non-gui/GAPS.md:109",
       "test_ref": "",
       "code_ref": "",
