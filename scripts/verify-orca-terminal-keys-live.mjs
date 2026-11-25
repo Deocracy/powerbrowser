@@ -578,6 +578,9 @@ export async function selectAndMiddleClick(ctx, theia, tab) {
     const screen = await ctx.probe(`const shell = get('ApplicationShell');
         const s = () => { const w = shell.getWidgetById(${JSON.stringify(tab)}); return w && w.isVisible && w.node.querySelector('.xterm-screen'); };
         if (!(await until(s, 15000))) { const w = shell.getWidgetById(${JSON.stringify(tab)}); return { error: 'no visible .xterm-screen', area: w ? shell.getAreaFor(w) : null, visible: !!(w && w.isVisible), mode: document.body.getAttribute('data-pb-mode') }; }
+        // A tab just shown still refits its terminal: the box must hold still for half a second before a drag is aimed at it.
+        let last = '', still = 0;
+        for (let i = 0; i < 40 && still < 5; i++) { const b = s()?.getBoundingClientRect(); const k = b ? [b.left, b.top, b.right, b.bottom].join() : ''; still = k && k === last ? still + 1 : 0; last = k; await sleep(100); }
         const r = s().getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };`);
     if (screen?.error) throw new Error(`harness: ${tab}: ${JSON.stringify(screen)}`);
     // Row 0 holds only the token, so a drag across the row selects exactly the token.

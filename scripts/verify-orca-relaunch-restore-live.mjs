@@ -614,8 +614,11 @@ async function runLive() {
                 await sleep(1500);
                 pasteChoice.offCount = tokens();
                 pasteChoice.on = await keys.setPasteSetting(keysCtx(s), true);
-                await keys.selectAndMiddleClick(keysCtx(s), theiaContext, pasteChoice.tab);
-                await s.pollFor(async () => (tokens() > pasteChoice.offCount ? true : null), 5000, 'the pasted token').catch(() => null);
+                // The positive control only: a drag that missed the row pasted nothing and is made again; the off count above is one shot.
+                for (let i = 0; i < 3 && tokens() === pasteChoice.offCount; i++) {
+                    await keys.selectAndMiddleClick(keysCtx(s), theiaContext, pasteChoice.tab);
+                    await s.pollFor(async () => (tokens() > pasteChoice.offCount ? true : null), 5000, 'the pasted token').catch(() => null);
+                }
                 await sleep(700);
                 pasteChoice.onCount = tokens();
             }
