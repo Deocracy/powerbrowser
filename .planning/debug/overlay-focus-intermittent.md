@@ -3,6 +3,10 @@ status: awaiting_human_verify
 trigger: "Debug and fix the intermittent overlay focus failure: after Paste & Go from the pill's context menu, or after the harness's focusOverlay (scripts/lib/pb-live-probe.mjs:147), chrome's focus is sometimes not in the overlay's page (3 of 5 full verify-address-bar-live runs). Todo: .planning/todos/pending/2026-10-23-overlay-focus-intermittent.md"
 created: 2026-10-22T00:00:00Z
 updated: 2026-10-22T23:59:00Z
+audit_acknowledged:
+  milestone: v1.7
+  at: 2026-11-25
+  status: awaiting_human_verify
 ---
 
 ## Current Focus

@@ -1,5 +1,29 @@
 # Milestones
 
+## v1.7 Orca integration (Closed: 2026-11-25, override closeout, no tag)
+
+- **Phases:** 10 (59–68) | **Plans:** 62/66 with a SUMMARY (63-01, 63-02, 63-05 superseded stubs; 59-05, 59-06, 59-07, 60-05 owner plans pending)
+- **Git:** 1083 commits from 783cb30d (2026-11-04) to the close; 732 files outside `upstream/`, +183,854/−2,090; merged to `main` through pull request #10. No tag and no user-facing version name (Chris, D-63: "V1.7 is just a marker not the name").
+- **Archives:** `.planning/workstreams/orca/milestones/v1.7-ROADMAP.md`, `v1.7-REQUIREMENTS.md`, `v1.7-MILESTONE-AUDIT.md`
+- **Gate:** run 10 at 04fd8ebc, `--gate` PASS-WITH-EXCLUSIONS, 637 PASS, exit 0, 32 named known-open exclusions (WINDOWS 29, 30, 31, 32, 35, 51, 70). GitHub `verify` green on the branch head.
+- **Closeout type:** override_closeout. Phase verifications 60, 61, 63–68 are `human_needed`; 9 debug sessions await a look by eye. All 17 acknowledged and listed in the workstream STATE.md `## Deferred Items` (Chris: "Record as deferred", 2026-11-25).
+- **Known verification overrides:** 17 newly acknowledged, 2 carried forward.
+
+Shipped: Orca's agent workflow inside PowerBrowser. Orca is built from source under an additive overlay and runs as a PowerBrowser-run, slot-less orcad on Theia's Node. Each Orca pane is a Lumino tab in Orca mode, and Orca terminals are hosted tabs on Orca's engine. PowerBrowser web tabs are Orca's browser, with a chrome-side agent bridge and agent-control mark. The release also adds hosting hardening (failure page, pairing-offer containment, sidecar Origin check), a Theia-following Orca theme, and the main-process crash fix (WINDOWS 72).
+
+### Known Gaps
+
+- OVL-02 weekly Orca re-pin job, OVL-03 mobile protocol check, OVL-06 upstream seam PRs (owner opens them, WINDOWS 51)
+- EXT-01 Claude Code extension on Orca worktrees (owner plan 60-05), EXT-02 extension sessions visible in Orca
+- PLAT-01 and PLAT-02: Linux only (D-40); macOS and Windows moved to the next version
+- Owner plans 59-05, 59-06, 59-07 (carry-forward live and deploy steps); END-OF-MILESTONE-CHECKLIST.md items not yet seen by eye
+- CodeQL on pull request #10: 206 new alerts, triaged as test-harness and false-positive findings, left open for a cleanup pass
+
+Deviations from the standard close workflow (same as v1.0 and v1.5):
+
+- `milestone.complete` refused (it finds no versioned `## v1.7` heading in the workstream ROADMAP), so the archive copies were made by hand.
+- REQUIREMENTS.md, ROADMAP.md and the phase directories stay in place: `--quick` checks (for example `verify-orca-tabs-live.mjs`, `verify-orca-browser-tools.mjs`) read them.
+
 ## v1.5 Chrome Bar Firefox Parity (Shipped: 2026-11-07)
 
 **Phases completed:** 14 phases, 93 plans, 91 tasks

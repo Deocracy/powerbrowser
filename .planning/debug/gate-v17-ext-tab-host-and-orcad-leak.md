@@ -3,6 +3,10 @@ status: awaiting_human_verify
 trigger: "gate 2026-11-16 at 4a7308ba: ext-tab-host-live(+self-test) red not excluded (options-page-switch control: 2 options tabs while stock window starting); leaked orcad pid 1290561 port 26768 started 12:13:56 PST, survived the gate"
 created: 2026-11-16T20:20:00Z
 updated: 2026-11-17T05:10:00Z
+audit_acknowledged:
+  milestone: v1.7
+  at: 2026-11-25
+  status: awaiting_human_verify
 ---
 
 ## Current Focus

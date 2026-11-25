@@ -47,6 +47,10 @@ human_verification:
   - test: "In the same session, open Theia's Settings and look up claudeCode.claudeProcessWrapper; then set a user value and restart."
     expected: "The default shows the launcher path; a user-set value wins over it; no settings.json is written by PowerBrowser."
     why_human: "orca-agents-frontend-module.ts:33 registers a default override for a key whose schema the extension contributes later; whether Theia 1.76 applies it to the extension's property needs the extension installed."
+audit_acknowledged:
+  milestone: v1.7
+  at: 2026-11-25
+  status: human_needed
 ---
 
 # Phase 63: Agent hooks on Orca's terminal engine — Verification Report

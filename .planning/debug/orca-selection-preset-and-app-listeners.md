@@ -3,6 +3,10 @@ status: awaiting_human_verify
 trigger: "Job 1 (owner ruling 2026-11-17, 'Preset it ON on Linux, in memory'): hosted Orca terminals on Linux paste their selection on middle-click out of the box, in memory only like D-32, user's explicit choice wins. Job 2 ('Test and scope if needed'): test useLargeTextControlPaste, session-persistence beforeunload, workspace-activation focus helper live against non-Orca Theia UI; scope any that affects it"
 created: 2026-11-17T19:30:00Z
 updated: 2026-11-18T00:40:00Z
+audit_acknowledged:
+  milestone: v1.7
+  at: 2026-11-25
+  status: awaiting_human_verify
 ---
 
 ## Current Focus

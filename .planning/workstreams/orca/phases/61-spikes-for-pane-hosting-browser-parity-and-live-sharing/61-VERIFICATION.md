@@ -14,6 +14,10 @@ human_verification:
   - test: "Owner decision on criterion 4 ordering for Phase 63: accept or reject an override"
     expected: "Owner accepts that Phase 63 was planned (63-01..05 at c458f87b, 2026-11-10 08:25; revised 5ca4e24c 08:55) against spike 006's chosen route read from the lane branch (63-CONTEXT.md:49 P63-16, :107, :150-151; 63-03-PLAN.md:87), although the ROADMAP 'Route chosen by Phase 61' line for 63 landed afterwards (8321865b, 09:10); or rejects it"
     why_human: "The ordering clause of criterion 4 cannot be repaired after the fact; only an owner override can settle it. The substance (63 builds the chosen route, with all three YELLOW conditions carried) is verified"
+audit_acknowledged:
+  milestone: v1.7
+  at: 2026-11-25
+  status: human_needed
 ---
 
 # Phase 61: Spikes for pane hosting, browser parity and live sharing Verification Report

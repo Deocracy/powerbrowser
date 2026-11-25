@@ -3,6 +3,10 @@ status: awaiting_human_verify
 trigger: "gate at 2788eb05 (gate-v17-run2.log): orca-service-live FAIL vacuous nothing to reap after 'firefox-bidi: stopped 3 process(es)'; first-boot-surface-fresh FAIL 169 boot errors {type undefined, message undefined}; both green at 4a7308ba"
 created: 2026-11-17T08:00:00Z
 updated: 2026-11-17T12:00:00Z
+audit_acknowledged:
+  milestone: v1.7
+  at: 2026-11-25
+  status: awaiting_human_verify
 ---
 
 ## Current Focus

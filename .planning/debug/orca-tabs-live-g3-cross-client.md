@@ -3,6 +3,10 @@ status: awaiting_human_verify
 trigger: "TAB-04: orca-tabs-live stage tab-groups-cross-client (g3) red since Phase 64/65: 'the second client shows no tab for T (web-terminal-...)'. WINDOWS entry 55. D-49: attempt a fix now."
 created: 2026-11-16T00:00:00Z
 updated: 2026-11-16T00:00:00Z
+audit_acknowledged:
+  milestone: v1.7
+  at: 2026-11-25
+  status: awaiting_human_verify
 ---
 
 ## Current Focus

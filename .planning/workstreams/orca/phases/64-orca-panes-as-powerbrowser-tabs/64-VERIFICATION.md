@@ -67,6 +67,10 @@ human_verification:
   - test: "Owner review of the 64-06 key items: Ctrl+V and Ctrl+C-with-selection stay Orca's in hosted terminals; Ctrl+Shift+W from a focused web page goes to the page; the two quick-pick placeholder strings; P64-37; Ctrl+[ / Ctrl+] released (proven statically only)"
     expected: "Owner accepts each item or files a ruling"
     why_human: "Owner decisions. orca-terminal-keys prints them as 'owner item' notes, and no check can decide them"
+audit_acknowledged:
+  milestone: v1.7
+  at: 2026-11-25
+  status: human_needed
 ---
 
 # Phase 64: Orca panes as PowerBrowser tabs Verification Report

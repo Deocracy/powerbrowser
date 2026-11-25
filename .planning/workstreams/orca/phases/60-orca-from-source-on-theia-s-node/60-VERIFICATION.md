@@ -19,6 +19,10 @@ human_verification:
   - test: "Review the four 60-05 prohibitions once the session has run: the extension is never pinned/packaged/allow-listed; no credential, OAuth code, API key or pairing URL in the record, SUMMARY, logs or chat; orcad never on the real Orca profile; 60-05 changes no tracked file outside .planning/"
     expected: "All four hold after the live session is recorded."
     why_human: "Prohibitions are judgment-tier (verification: unverified) and the plan that they govern has not executed. Non-authoritative pre-check below found no violation."
+audit_acknowledged:
+  milestone: v1.7
+  at: 2026-11-25
+  status: human_needed
 ---
 
 # Phase 60: Orca from source on Theia's Node — Verification Report

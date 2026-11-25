@@ -84,6 +84,10 @@ human_verification:
   - test: "68-11 reinstall command visibility transitions (see behavior_unverified_items)"
     expected: "Hidden while present, offered after uninstall, never automatic"
     why_human: "Frontend state transition; no automated test exercises it"
+audit_acknowledged:
+  milestone: v1.7
+  at: 2026-11-25
+  status: human_needed
 ---
 
 # Phase 68: Three-OS artifacts, weekly re-pin and upstream seams Verification Report

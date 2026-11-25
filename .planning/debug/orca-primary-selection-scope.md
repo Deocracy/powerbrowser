@@ -3,6 +3,10 @@ status: awaiting_human_verify
 trigger: "Orca's usePrimarySelectionPaste runs in the Theia document (pb-pane-mount.tsx:173) and cancels middle-click paste into every Theia text field while orcad runs; owner ruling 2026-11-17: limit the hook to Orca panes"
 created: 2026-11-17T13:00:00Z
 updated: 2026-11-17T19:00:00Z
+audit_acknowledged:
+  milestone: v1.7
+  at: 2026-11-25
+  status: awaiting_human_verify
 ---
 
 ## Current Focus

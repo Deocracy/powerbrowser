@@ -3,6 +3,10 @@ status: awaiting_human_verify
 trigger: "Owner, 2026-11-18, with a screenshot of the dev build on a fresh profile: 'Bit GUI problem. orca dose not look like orca'"
 created: 2026-11-18T00:00:00Z
 updated: 2026-11-19T14:10:00Z
+audit_acknowledged:
+  milestone: v1.7
+  at: 2026-11-25
+  status: awaiting_human_verify
 ---
 
 ## Current Focus

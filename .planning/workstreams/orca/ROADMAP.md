@@ -10,7 +10,7 @@ Owner decisions D-01..D-31 (`DECISIONS.md`) and the adopted adversarial review (
 
 ## Milestones
 
-- **v1.7 Orca integration** — Phases 59–68 (61–68 executed, 59 and 60 partially executed; workstream `orca`; requirements in `.planning/workstreams/orca/REQUIREMENTS.md`)
+- ✅ **v1.7 Orca integration** — Phases 59–68 (closed 2026-11-25, override closeout, no tag; archive `.planning/workstreams/orca/milestones/v1.7-ROADMAP.md`; open items in `.planning/MILESTONES.md`)
 
 ## Hard constraints (every phase)
 

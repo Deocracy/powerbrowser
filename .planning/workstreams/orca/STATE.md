@@ -3,7 +3,7 @@ gsd_state_version: "1.0"
 milestone: v1.7
 current_phase: 68
 current_phase_name: Three-OS artifacts, weekly re-pin and upstream seams
-status: "Code-complete, feature freeze (D-61); gate run 10 exits 0; waiting on the owner's push, merge and closing word; not finished, not tagged"
+status: "Closed 2026-11-25 (override closeout, no tag); merged to main through PR #10"
 stopped_at: "2026-11-25: gate run 10 at 04fd8ebc: 637 PASS, GATE_EXIT=0, PASS-WITH-EXCLUSIONS (32 named known-open); WINDOWS 72 (main-process crash) fixed; NG-078, NG-079, NG-080 approved, ledger completion passes; local commits after 791cba4f not pushed"
 last_updated: "2026-11-24T00:00:00.000Z"
 last_activity: 2026-11-25
@@ -147,6 +147,23 @@ None yet.
 
 | Category | Item | Status | Deferred At | Milestone |
 |----------|------|--------|-------------|-----------|
+| debug_sessions | chrome-bar-suggestions-and-placement (investigating) | awaiting_human_verify | 2026-11-25 | v1.7 |
+| debug_sessions | gate-v17-ext-tab-host-and-orcad-leak | awaiting_human_verify | 2026-11-25 | v1.7 |
+| debug_sessions | gate-v17-run2-reap-and-first-boot | awaiting_human_verify | 2026-11-25 | v1.7 |
+| debug_sessions | orca-first-show-focus-and-paste-choice | awaiting_human_verify | 2026-11-25 | v1.7 |
+| debug_sessions | orca-mode-fresh-profile-look | awaiting_human_verify | 2026-11-25 | v1.7 |
+| debug_sessions | orca-primary-selection-scope | awaiting_human_verify | 2026-11-25 | v1.7 |
+| debug_sessions | orca-selection-preset-and-app-listeners | awaiting_human_verify | 2026-11-25 | v1.7 |
+| debug_sessions | orca-tabs-live-g3-cross-client | awaiting_human_verify | 2026-11-25 | v1.7 |
+| debug_sessions | overlay-focus-intermittent | awaiting_human_verify | 2026-11-25 | v1.7 |
+| verification_gaps | Phase 60/60-VERIFICATION.md | human_needed | 2026-11-25 | v1.7 |
+| verification_gaps | Phase 61/61-VERIFICATION.md | human_needed | 2026-11-25 | v1.7 |
+| verification_gaps | Phase 63/63-VERIFICATION.md | human_needed | 2026-11-25 | v1.7 |
+| verification_gaps | Phase 64/64-VERIFICATION.md | human_needed | 2026-11-25 | v1.7 |
+| verification_gaps | Phase 65/65-VERIFICATION.md | human_needed | 2026-11-25 | v1.7 |
+| verification_gaps | Phase 66/66-VERIFICATION.md | human_needed | 2026-11-25 | v1.7 |
+| verification_gaps | Phase 67/67-VERIFICATION.md | human_needed | 2026-11-25 | v1.7 |
+| verification_gaps | Phase 68/68-VERIFICATION.md | human_needed | 2026-11-25 | v1.7 |
 | *(none)* | | | | |
 
 ## Session Continuity

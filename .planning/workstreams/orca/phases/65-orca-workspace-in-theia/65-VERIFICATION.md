@@ -104,6 +104,10 @@ human_verification:
   - test: "Remove the leftover worktree directories under ~/orca/workspaces/repo/ left by earlier orca-workspace-live runs"
     expected: "Directories removed by hand"
     why_human: "Agent cannot recursively delete outside the project"
+audit_acknowledged:
+  milestone: v1.7
+  at: 2026-11-25
+  status: human_needed
 ---
 
 # Phase 65: Orca workspace in Theia Verification Report

@@ -74,6 +74,10 @@ human_verification:
   - test: "Review the plan prohibitions marked 'verification: unverified' (67-01..67-05 must_haves.prohibitions)."
     expected: "The owner accepts the non-authoritative verdicts in 'Prohibitions' below."
     why_human: "Judgment-tier prohibitions get no enforcement test; this report's verdicts are non-authoritative (ADR-550 D4)."
+audit_acknowledged:
+  milestone: v1.7
+  at: 2026-11-25
+  status: human_needed
 ---
 
 # Phase 67: Hosting hardening Verification Report

@@ -88,6 +88,10 @@ human_verification:
   - test: "Deferred owner table: S2 over S1, P66-08, P66-11, P66-22, P66-24, P66-26, O1, O2, Places history, D-35's popup revisit, D-37's owner items (agent downloads, mailto hand-off), T-66-08-04, T-66-09-04, the agent container visible in the stock window's container UI, the native file picker an agent click can raise"
     expected: "Each row ruled"
     why_human: "Owner decisions"
+audit_acknowledged:
+  milestone: v1.7
+  at: 2026-11-25
+  status: human_needed
 ---
 
 # Phase 66: PowerBrowser web tabs as Orca's browser Verification Report

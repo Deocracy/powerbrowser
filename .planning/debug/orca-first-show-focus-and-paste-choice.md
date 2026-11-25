@@ -3,6 +3,10 @@ status: awaiting_human_verify
 trigger: "Job 1 (owner ruling 2026-11-17, 'Fix now'): a hosted Orca terminal focuses itself when its terminal is first created (first show), taking keyboard focus from a visible Theia editor; it must take focus only on user activation or a click inside. Job 2 ('Remember my off'): the Linux in-memory preset of Middle-click Paste from Selection returns after every restart; PowerBrowser must remember that the user made a choice, per profile"
 created: 2026-11-17T12:00:00Z
 updated: 2026-11-18T01:10:00Z
+audit_acknowledged:
+  milestone: v1.7
+  at: 2026-11-25
+  status: awaiting_human_verify
 ---
 
 ## Current Focus
