@@ -1088,7 +1088,7 @@ async function live() {
             // p
             const themeObs = {};
             for (const t of ['light', 'dark']) themeObs[t] = await ctx.probe(`get('ThemeService').setCurrentTheme('${t}'); await sleep(1500);
-                const bg = document.querySelector('.pb-orca-side-view .bg-worktree-sidebar'); const name = document.querySelector('.pb-orca-side-view [data-project-group-header-id], .pb-orca-side-view .truncate.font-semibold');
+                const bg = document.querySelector('.pb-orca-side-view .bg-worktree-sidebar'); const name = [...document.querySelectorAll('.pb-orca-side-view *')].find(x => !x.children.length && x.textContent.trim() === ${J(ctx.repo.split('/').pop())});
                 const lum = c => { const m = /rgba?\\((\\d+), (\\d+), (\\d+)/.exec(c); return m ? (0.2126 * m[1] + 0.7152 * m[2] + 0.0722 * m[3]) : null; };
                 return { orca: document.documentElement.classList.contains('dark') ? 'dark' : 'light', bg: bg && lum(getComputedStyle(bg).backgroundColor), text: name && lum(getComputedStyle(name).color) };`);
             clause('p theme', themeVerdict(themeObs), 'Orca follows a light and a dark Theia theme, and its project name contrasts with its sidebar in both');
@@ -1099,8 +1099,10 @@ async function live() {
             const origin = await ctx.probe('return performance.timeOrigin;');
             await ctx.app.evaluate('setTimeout(() => location.reload(), 0), true').catch(() => undefined);
             const reloaded = await ctx.pollFor(async () => { const o = await ctx.probe(`return get('FrontendApplicationStateService').state === 'ready' ? performance.timeOrigin : null;`, 5000).catch(() => null); return o && o !== origin ? true : null; }, 90000, 'the reloaded frontend').catch(() => false);
-            await ctx.probe('await sleep(2500); return true;').catch(() => undefined);
-            clause('q reload', modeReloadVerdict({ before: beforeReload, reloaded, after: reloaded ? await modeRead() : null }), 'after a reload the mode buttons show the Orca mode the shell is in');
+            const readAfter = async () => { const r = await modeRead().catch(() => null); return r?.shown ? r : null; };
+            const settled = reloaded ? await ctx.pollFor(readAfter, 30000, 'the mode buttons after the reload').catch(() => null) : null;
+            await new Promise(r => setTimeout(r, settled ? 4000 : 0));
+            clause('q reload', modeReloadVerdict({ before: beforeReload, reloaded, after: settled ? await ctx.pollFor(readAfter, 15000, 'the settled mode buttons').catch(() => null) : null }), 'after a reload the mode buttons show the Orca mode the shell is in');
         });
     } catch (err) {
         console.error(`${NAME}: FAIL -- the session did not complete: ${String(err?.message ?? err).split('\n')[0]}`);
