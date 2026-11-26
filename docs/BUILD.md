@@ -1660,6 +1660,17 @@ row's evidence, the hop included, predates 153.5 and was not re-run at 153.5.
 | Windows 11 / pkg-win11 | staged-unexecuted | staged-unexecuted | staged-unexecuted (must prove no collision against stock Firefox with the frozen remoting and window-class pins) | staged-unexecuted (must include the no-residue check after uninstall) | staged-unexecuted (must cite two distinct versions and build IDs plus fork-server log entries) — unblock for the whole row: capability record above |
 | macOS / pkg-macos | staged-unexecuted | staged-unexecuted | staged-unexecuted | staged-unexecuted | staged-unexecuted — unblock for the whole row: capability record above |
 
+Linux uninstall procedure (owner ruling 2026-11-26). The tarball has no uninstaller. To uninstall:
+quit the browser, delete the extracted application directory, then delete the two per-user
+directories Gecko keeps for it, `~/.config/<vendor>/<name>` (profiles and settings) and
+`~/.cache/<vendor>/<name>` (caches), where `<vendor>` and `<name>` are `Vendor` and `Name` from the
+package's `application.ini` in lower case. Gecko creates both at every start, including a
+start with `--profile`, as stock Firefox does with `~/.config/mozilla/firefox` and
+`~/.cache/mozilla/firefox`. The `install-matrix` row's uninstall cell performs exactly this (it
+derives the two paths from the extracted `application.ini`) and then requires that no other path
+under the home directory is named after the product. The GREEN in the Linux row's uninstall cell
+below the header predates this: it compared `ls ~`, which does not list dot directories.
+
 Two harness faults found and fixed while driving the Linux cells (test-side
 only, no product change): the driver first leaked the fork-prefix
 `LD_LIBRARY_PATH` into the stock-firefox invocation (stock `libxul.so`

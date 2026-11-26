@@ -124,6 +124,8 @@ after install, the update channel is signature-verified end to end.
 The first public release is Linux only, x86_64 only, and en-US only. All three
 scopes are stated on the download page.
 
+The Linux release is built without the native ONNX Runtime library (`--without-onnx-runtime` in `powerbrowser/packaging/mozconfig.release`, owner ruling 2026-11-26): the prebuilt library the bootstrap would fetch needs glibc 2.34, above the shipped floor of glibc 2.28 (`powerbrowser/packaging/portability-floor.json`), so the ML engine uses its in-tree wasm backend.
+
 ### Windows
 
 The installer `.exe` ships **unsigned**. There is no Authenticode certificate and no
@@ -2459,7 +2461,7 @@ on the absence of a log line.
 | `ng065-mar-signature-enforced` | 3 | Full tier: the packaged tree's own updater applies a fork-signed full MAR, refuses an unsigned and a throwaway-key MAR with `CERT_VERIFY_ERROR` and a fork-signed MAR for another channel with `MAR_CHANNEL_MISMATCH_ERROR` (codes read from upstream at check time), and accepts a MAR signed by the secondary key only, `powerbrowser-mar-secondary` from the store named by `PB_MAR_SECONDARY_DB`. The secondary-only case lands with the tracked `mar-secondary.der`; until then the row runs the first four | No separate self-test: the four refusal cases and the secondary-only acceptance case are the plants |
 | `packaged-launch` | 4 | An extracted package launches on a fresh profile and reaches the Theia shell with both product markers, resolving in-prefix | Remove the staged backend |
 | `packaged-identity` | 4 | `application.ini` and the staged Theia `package.json` carry release-variant identity, and no staged `theia/` file carries a dev-variant notice | A dev suffix in the staged notice; a dev notice in the staged frontend bundle |
-| `install-matrix-linux` | 4 | Install, launch, coexistence and no-residue over paths derived from the packaged `application.ini` | Driver self-test |
+| `install-matrix-linux` | 4 | Install, launch, coexistence and no-residue over paths derived from the packaged `application.ini`. The uninstall is the Linux procedure in `docs/BUILD.md` "Per-OS install matrix": the application directory, then `~/.config/<vendor>/<name>` and `~/.cache/<vendor>/<name>` (owner ruling 2026-11-26); any other product-named path under the home directory is residue | Driver self-test |
 | `update-ready-layer` | 4 | The shell offers a working restart affordance, gated on the probe verdict about whether the stock prompt can render at all | Layer self-test |
 | `release-workflow` | 5 | Triggers, SHA pins, actions-policy admissibility, per-job permissions and the derived asset set | An unpinned action; an added `pull_request` trigger; `id-token: write` moved onto the legion job; a secret reference in the legion job; a dropped asset name; a third-party action absent from `patterns_allowed`; a verify invocation removed from between sign and upload; a renamed signing secret |
 | `channel-live` | 5 | The live channel agrees with the published Release, all derived from the build's manifest and the tree; the patch URL is the MAR origin at `/<tag>/<asset>` | A wrong `hashValue`; a missing target descriptor; a 404 MAR URL; a size mismatch; a github.com, release-assets or other-host patch URL; a manifest `mar_origin` off the tree |
