@@ -577,7 +577,7 @@ function selfTest() {
         ['Node-pin filter accepts every entry', sliceEdit('process.exit(1);', 'process.exit(0);'), 'node-pin', 'malformed digest'],
         ['key gate if removed from the Firefox fetch', sliceEdit("      - name: Fetch the pinned Firefox source and apply the patch stack\n        if: steps.key_gate.outputs.build == 'true'\n", '      - name: Fetch the pinned Firefox source and apply the patch stack\n'), 'gates', 'Fetch the pinned Firefox'],
         ['sha gate body drifts from build-linux', sliceEdit('echo "validated $SHA"', 'echo "validated $SHA again"'), 'gates', 'sha_gate'],
-        ['pipefail removed from the cross-build step', sliceEdit('          set -euo pipefail\n          podman run --rm', '          podman run --rm'), 'gates', 'pipefail'],
+        ['pipefail removed from the cross-build step', sliceEdit('          set -euo pipefail\n          mkdir -p "$PWD/.mozbuild/release-state" && podman run --rm', '          mkdir -p "$PWD/.mozbuild/release-state" && podman run --rm'), 'gates', 'pipefail'],
         ['identity upload carrying the MAR', sliceEdit('            objdir-windows-x86_64/dist/bin/application.ini\n', '            objdir-windows-x86_64/dist/bin/application.ini\n            objdir-windows-x86_64/dist/release-windows/*.complete.mar\n'), 'retention', 'retention-days 7'],
         ['upload retention raised', sliceEdit('          retention-days: 1\n          overwrite: true', '          retention-days: 5\n          overwrite: true'), 'retention', 'retention-days 5'],
         // harness-other-04: the licence-rulings guard (P68-21), found structurally; the wrapped plants use run-no-skip.sh whatever the step says today
