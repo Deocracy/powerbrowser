@@ -14,8 +14,11 @@
 # Then configure and build with the release mozconfig variant generated from
 # configuration.toml (powerbrowser/packaging/mozconfig.release, emitted by
 # scripts/generate.mjs, never hand-edited):
-#   podman run --rm -v "$PWD:/src:rw" -v <legion-keydir>:/keys:ro -w /src/upstream \
-#     pb-gecko-build bash -c 'MOZCONFIG=/src/powerbrowser/packaging/mozconfig.release ./mach build && bash /src/scripts/toolchain-baseline.sh --container'
+#   podman run --rm --userns=keep-id:uid=1000,gid=1000 -v "$PWD:/src:rw" -v <legion-keydir>:/keys:ro -w /src/upstream \
+#     pb-gecko-build bash -c 'set -euo pipefail; mkdir -p "$HOME/.mozbuild"; (cd "$HOME/.mozbuild" && /src/upstream/mach artifact toolchain --from-build linux64-rust); export PATH="$HOME/.mozbuild/rustc/bin:$PATH"; MOZCONFIG=/src/powerbrowser/packaging/mozconfig.release ./mach build && bash /src/scripts/toolchain-baseline.sh --container'
+# Rust is fetched explicitly because configure bootstraps it only under Mozilla
+# automation; the command is the one the bootstrap runs for every other
+# toolchain, and it resolves the Rust this ESR pins (alias linux64-rust).
 # ./mach lives in upstream/, so the build runs from /src/upstream; the release
 # objdir is objdir-release/ at the repo root (the mozconfig's @TOPSRCDIR@/..).
 #
@@ -34,7 +37,11 @@ FROM debian:bookworm@sha256:854dd8ab51d62866dbd8f5431d15ce77b12983a2a4a1e1fe43a2
 # run) and screen (interactive use only). Added: python3-venv (mach virtualenv),
 # patchelf (staging RUNPATH strip), nodejs (mach build-system JS; the shipped
 # sidecar still stages the pinned official node from node-runtime.json, never
-# apt node).
+# apt node), git (upstream/ is a git checkout, so mach resolves its repository
+# through the git binary; without it `mach taskgraph` exits 1 with
+# MissingVCSTool, --enable-bootstrap fetches no toolchain, and configure stops
+# at "Cannot find the target C compiler"; Mozilla's own build images get git
+# from the debian-base layer under debian-build).
 # Reproducible package set: the base is pinned by digest above, and apt reads a
 # snapshot.debian.org timestamp rather than the floating mirror, so two builds
 # of this file fetch the same packages. dist-upgrade is gone; it pulled whatever
@@ -61,6 +68,7 @@ RUN rm -f /etc/apt/sources.list.d/debian.sources && \
       file \
       findutils \
       gawk \
+      git \
       gnupg \
       gzip \
       jq \
@@ -85,7 +93,10 @@ RUN rm -f /etc/apt/sources.list.d/debian.sources && \
 
 # Non-root build user: legion runs rootless podman and the runner work dir
 # must stay free of spaces (SEC-08 shape). The build runs as this user, so a
-# container-side root-owned objdir can never lock the host checkout.
+# container-side root-owned objdir can never lock the host checkout. builder is
+# uid 1000 (the first useradd in the image); every `podman run` that mounts the
+# checkout passes --userns=keep-id:uid=1000,gid=1000 so the invoking host user
+# maps onto it and can write /src.
 RUN useradd -m -s /bin/bash builder
 USER builder
 WORKDIR /src
