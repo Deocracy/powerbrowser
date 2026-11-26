@@ -49,17 +49,36 @@
 # agent server's npm closure in particular) should run inside the container or off this host.
 { config, pkgs, lib, ... }:
 let
-  # Rootless podman looks up newuidmap and newgidmap on PATH, and the runner's PATH holds only its
-  # extraPackages, so the first release run on this runner failed with 'exec: "newuidmap":
-  # executable file not found in $PATH' (2026-11-26). The two setuid wrappers NixOS installs in
-  # /run/wrappers/bin are linked here by absolute path; a store copy of shadow's binaries would not
-  # be setuid.
+  # Rootless podman runs newuidmap and newgidmap from PATH. The kernel lets a multi-range id map be
+  # written only by the namespace owner holding CAP_SETUID (or CAP_SETGID) in the parent namespace,
+  # or by a writer with CAP_SYS_ADMIN (kernel/user_namespace.c, map_write and new_idmap_permitted).
+  # NixOS's own /run/wrappers/bin/newuidmap is setuid root, so under this runner's bounding set it is
+  # neither (third and fourth release runs, 2026-11-26: "open of uid_map failed: Permission denied",
+  # then "write to uid_map failed: Operation not permitted"). The runner therefore gets its own
+  # capability wrappers (security.wrappers below): they keep the caller's uid, which owns the new
+  # namespace, and add only CAP_SETUID or CAP_SETGID, as Fedora and Debian ship these helpers.
+  # The links below put them on the runner's PATH under the names podman looks up.
   uidmapWrappers = pkgs.runCommand "pb-runner-uidmap-wrappers" { } ''
     mkdir -p $out/bin
-    ln -s /run/wrappers/bin/newuidmap /run/wrappers/bin/newgidmap $out/bin/
+    ln -s /run/wrappers/bin/pb-runner-newuidmap $out/bin/newuidmap
+    ln -s /run/wrappers/bin/pb-runner-newgidmap $out/bin/newgidmap
   '';
 in
 {
+  security.wrappers.pb-runner-newuidmap = {
+    source = "${pkgs.shadow}/bin/newuidmap";
+    capabilities = "cap_setuid+ep";
+    owner = "root";
+    group = "pb-runner";
+    permissions = "u+rx,g+x"; # only root and the runner's group can run it
+  };
+  security.wrappers.pb-runner-newgidmap = {
+    source = "${pkgs.shadow}/bin/newgidmap";
+    capabilities = "cap_setgid+ep";
+    owner = "root";
+    group = "pb-runner";
+    permissions = "u+rx,g+x";
+  };
   # --- 1. The release runner (docs/RELEASING.md "Runner registration through the /etc/nixos flow") ---
   services.github-runners.powerbrowser-release = {
     enable = true;
@@ -92,10 +111,7 @@ in
       NoNewPrivileges = false; # newuidmap and newgidmap are setuid wrappers in /run/wrappers
       # The module's empty bounding set leaves the setuid helpers euid 0 with no capability, and
       # writing a multi-range uid_map or gid_map needs CAP_SETUID or CAP_SETGID. Nothing else is added.
-      # CAP_DAC_OVERRIDE (measured 2026-11-26, third release run: "newuidmap: open of uid_map failed:
-      # Permission denied"): nixpkgs' shadow is built without libcap, so newuidmap opens
-      # /proc/<pid>/uid_map as euid 0, and that file belongs to pb-runner, mode 0644.
-      CapabilityBoundingSet = lib.mkForce [ "CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE" ];
+      CapabilityBoundingSet = lib.mkForce [ "CAP_SETUID CAP_SETGID" ];
       PrivateDevices = false; # the private /dev has no /dev/fuse (fuse-overlayfs) and no /dev/net/tun (pasta)
       # ProtectClock implies DeviceAllow=char-rtc r, and a non-empty allow list closes every other
       # device, so the two devices rootless podman opens are allowed explicitly ("" first resets).
