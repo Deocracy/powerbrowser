@@ -42,7 +42,7 @@ test -f "$SRC/binding.gyp" && test -d "$SRC/src" && test -d "$SRC/deps" || fail 
 test -f "$ROOT/theia/node_modules/node-addon-api/package.json" || fail "$ROOT/theia/node_modules/node-addon-api is absent; run the frozen yarn install in theia/ first"
 test -f "$GYP" || fail "$GYP is absent; run the frozen yarn install in theia/ first"
 test -f "$NODE_ARCHIVE" || fail "$NODE_ARCHIVE is absent"
-test -x "$CLANG_BIN/clang" && test -x "$CLANG_BIN/ld.lld" && test -x "$CLANG_BIN/llvm-ar" || fail "no bootstrapped clang, ld.lld and llvm-ar under $CLANG_BIN; this runs in the release container after the release build (release.yml mounts .mozbuild/release-state as the mach state directory)"
+test -x "$CLANG_BIN/clang" && test -x "$CLANG_BIN/ld.lld" && test -x "$CLANG_BIN/llvm-ar" || fail "no bootstrapped clang, ld.lld and llvm-ar under $CLANG_BIN; this runs in the release container after the release build (release.yml names .mozbuild/release-state as the mach state directory with MOZBUILD_STATE_PATH)"
 test -d "$SYSROOT/usr/include" || fail "no bootstrapped sysroot at $SYSROOT; this runs in the release container after the release build"
 
 rm -rf "$WORK"

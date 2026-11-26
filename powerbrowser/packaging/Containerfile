@@ -14,8 +14,8 @@
 # Then configure and build with the release mozconfig variant generated from
 # configuration.toml (powerbrowser/packaging/mozconfig.release, emitted by
 # scripts/generate.mjs, never hand-edited):
-#   podman run --rm --userns=keep-id:uid=1000,gid=1000 -v "$PWD:/src:rw" -v <legion-keydir>:/keys:ro -w /src/upstream \
-#     pb-gecko-build bash -c 'set -euo pipefail; mkdir -p "$HOME/.mozbuild"; (cd "$HOME/.mozbuild" && /src/upstream/mach artifact toolchain --from-build linux64-rust); export PATH="$HOME/.mozbuild/rustc/bin:$PATH"; MOZCONFIG=/src/powerbrowser/packaging/mozconfig.release ./mach build && bash /src/scripts/toolchain-baseline.sh --container'
+#   mkdir -p "$PWD/.mozbuild/release-state" && podman run --rm --userns=keep-id:uid=1000,gid=1000 -v "$PWD:/src:rw" -e MOZBUILD_STATE_PATH=/src/.mozbuild/release-state -v <legion-keydir>:/keys:ro -w /src/upstream \
+#     pb-gecko-build bash -c 'set -euo pipefail; mkdir -p "$MOZBUILD_STATE_PATH"; (cd "$MOZBUILD_STATE_PATH" && /src/upstream/mach artifact toolchain --from-build linux64-rust); export PATH="$MOZBUILD_STATE_PATH/rustc/bin:$PATH"; MOZCONFIG=/src/powerbrowser/packaging/mozconfig.release ./mach build && bash /src/scripts/toolchain-baseline.sh --container'
 # Rust is fetched explicitly because configure bootstraps it only under Mozilla
 # automation; the command is the one the bootstrap runs for every other
 # toolchain, and it resolves the Rust this ESR pins (alias linux64-rust).
