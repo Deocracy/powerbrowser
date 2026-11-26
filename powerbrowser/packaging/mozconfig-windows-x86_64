@@ -9,7 +9,6 @@ ac_add_options --enable-update-channel=default
 ac_add_options MAR_CHANNEL_ID=powerbrowser-default
 ac_add_options ACCEPTED_MAR_CHANNEL_IDS=powerbrowser-default
 ac_add_options --enable-bootstrap
-ac_add_options --with-google-safebrowsing-api-keyfile=/keys/sb-gapi.data
 ac_add_options --with-app-basename=powerbrowser
 ac_add_options --with-distribution-id=org.debios
 ac_add_options --disable-crashreporter
