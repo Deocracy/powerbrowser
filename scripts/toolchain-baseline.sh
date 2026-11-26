@@ -80,8 +80,9 @@ if [ "${1:-}" = "--container" ]; then
     STATE="${MOZBUILD_STATE_PATH:-$HOME/.mozbuild}"
     # The bootstrap puts rustc, cargo, cbindgen and clang under the state dir,
     # and only mach's environment puts them on PATH. Measure the same binaries
-    # mach would use.
-    BOOT_BIN="$(find "$STATE" -maxdepth 5 -type f \( -name rustc -o -name cargo -o -name cbindgen -o -name clang \) -perm -u+x -printf '%h\n' 2>/dev/null | sort -u | paste -sd: -)"
+    # mach would use. Files and symlinks both: the bootstrapped clang/bin/clang
+    # is a symlink to clang-<major>, which -type f alone never matches.
+    BOOT_BIN="$(find "$STATE" -maxdepth 5 \( -type f -o -type l \) \( -name rustc -o -name cargo -o -name cbindgen -o -name clang \) -perm -u+x -printf '%h\n' 2>/dev/null | sort -u | paste -sd: -)"
     export PATH="${BOOT_BIN:+$BOOT_BIN:}$PATH"
 
     clang --version | sed -n 1p | grep -oE 'clang version [0-9]+\.[0-9]+\.[0-9]+' | sed 's/^clang version /clang /'
@@ -89,19 +90,25 @@ if [ "${1:-}" = "--container" ]; then
     cargo --version | grep -oE '^cargo [0-9]+\.[0-9]+\.[0-9]+'
     cbindgen --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sed 's/^/cbindgen /'
 
-    # The sysroot the bootstrap resolved: its dist comes from its own
-    # /etc/debian_version, its glibc from running its libc.so.6, and its
-    # libstdc++ ceiling from the GLIBCXX versions its libstdc++.so.6 defines.
+    # The sysroot the bootstrap resolved. Its glibc and its dist both come from
+    # the version banner inside its own libc.so.6, read as bytes ("GNU C Library
+    # (Debian GLIBC 2.19-18+deb8u10) stable release version 2.19"): the Mozilla
+    # sysroot carries no /etc (taskcluster/scripts/misc/build-sysroot.sh removes
+    # it), so there is no debian_version to read, and its libc cannot be run to
+    # print the banner (it segfaults outside its own loader, measured in the
+    # release container 2026-11-26). The libstdc++ ceiling is the highest
+    # GLIBCXX version its libstdc++.so.6 defines.
     SYSROOT="$(find "$STATE" -maxdepth 5 -type d -name 'sysroot-x86_64-linux-gnu' 2>/dev/null | sed -n 1p)"
-    if [ -z "$SYSROOT" ] || [ ! -f "$SYSROOT/etc/debian_version" ]; then
+    if [ -z "$SYSROOT" ] || [ ! -e "$SYSROOT/lib/x86_64-linux-gnu/libc.so.6" ]; then
         echo "toolchain-baseline: FAIL -- no bootstrapped sysroot-x86_64-linux-gnu under $STATE; the sysroot lines are UNMEASURED. Run the bootstrap build in this container first: $CONTAINER_CMD" >&2
         exit 1
     fi
-    case "$(cut -d. -f1 "$SYSROOT/etc/debian_version")" in
+    BANNER="$(grep -a -oE 'GNU C Library \([^)]*\) [a-z ]*release version [0-9][0-9.]*[0-9]' "$SYSROOT/lib/x86_64-linux-gnu/libc.so.6" | sed -n 1p || true)"
+    case "$(sed -n 's/.*(Debian [^)]*+deb\([0-9][0-9]*\)u[^)]*).*/\1/p' <<< "$BANNER")" in
         8) DIST=jessie ;; 9) DIST=stretch ;; 10) DIST=buster ;; 11) DIST=bullseye ;; 12) DIST=bookworm ;;
-        *) echo "toolchain-baseline: FAIL -- sysroot debian_version names no known dist" >&2; exit 1 ;;
+        *) echo "toolchain-baseline: FAIL -- the sysroot libc banner names no known Debian release: '$BANNER'" >&2; exit 1 ;;
     esac
-    GLIBC="$("$SYSROOT/lib/x86_64-linux-gnu/libc.so.6" | sed -n 's/.*version \([0-9][0-9.]*\).*/\1/p' | sed -n 1p)"
+    GLIBC="$(sed -n 's/.*release version \([0-9][0-9.]*\)$/\1/p' <<< "$BANNER")"
     GLIBCXX="$(readelf -V "$SYSROOT/usr/lib/x86_64-linux-gnu/libstdc++.so.6" | grep -oE 'GLIBCXX_[0-9]+(\.[0-9]+)+' | sort -uV | tail -n 1)"
     test -n "$GLIBC" && test -n "$GLIBCXX" || { echo "toolchain-baseline: FAIL -- could not measure the sysroot glibc or libstdc++ floor" >&2; exit 1; }
     echo "sysroot $DIST glibc-$GLIBC"

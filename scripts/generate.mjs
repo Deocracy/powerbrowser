@@ -1648,6 +1648,10 @@ function emitMozconfig(config, variant) {
  * rows, so a foreign-channel MAR still fails with updater error 22.
  */
 const SB_KEYFILE_MOUNT = '/keys/sb-gapi.data';
+// Owner ruling (Chris, 2026-11-25): the first public release ships without a Safe Browsing key, and
+// one is requested in a future version. Set this back to SB_KEYFILE_MOUNT once the owner has placed
+// sb-gapi.data in the runner's key directory (PB_KEYDIR); the release rows then carry the line again.
+const RELEASE_SB_KEYFILE = null;
 function emitMozconfigFor(config, variant, { bootstrap, sbKeyfile, tail = [] }) {
     // NG-065: one MAR channel for every build of this manifest, <app_basename>-<update channel>.
     // It is baked into MAR_CHANNEL_ID and into update-settings.ini's ACCEPTED_MAR_CHANNEL_IDS,
@@ -1743,7 +1747,7 @@ export function emitMozconfigWindows(config, variant) {
         `ac_add_options --target=${WINDOWS_TARGET.triple}`,
         'ac_add_options --disable-maintenance-service',
     ];
-    return emitMozconfigFor(config, { ...variant, objdir: WINDOWS_TARGET.objdir }, { bootstrap: true, sbKeyfile: SB_KEYFILE_MOUNT, tail });
+    return emitMozconfigFor(config, { ...variant, objdir: WINDOWS_TARGET.objdir }, { bootstrap: true, sbKeyfile: RELEASE_SB_KEYFILE, tail });
 }
 
 /**
@@ -1754,7 +1758,7 @@ export function emitMozconfigWindows(config, variant) {
  * manifest key and never the key value -- only the path travels in the tree.
  */
 function emitMozconfigRelease(config, variant) {
-    return emitMozconfigFor(config, variant, { bootstrap: true, sbKeyfile: SB_KEYFILE_MOUNT });
+    return emitMozconfigFor(config, variant, { bootstrap: true, sbKeyfile: RELEASE_SB_KEYFILE });
 }
 
 /**

@@ -48,7 +48,49 @@
 # the price of running rootless podman under this unit, and it is why third-party build code (the
 # agent server's npm closure in particular) should run inside the container or off this host.
 { config, pkgs, lib, ... }:
+let
+  # Rootless podman runs newuidmap and newgidmap from PATH. The kernel lets a multi-range id map be
+  # written only by the namespace owner holding CAP_SETUID (or CAP_SETGID) in the parent namespace,
+  # or by a writer with CAP_SYS_ADMIN (kernel/user_namespace.c, map_write and new_idmap_permitted).
+  # NixOS's own /run/wrappers/bin/newuidmap is setuid root, so under this runner's bounding set it is
+  # neither (third and fourth release runs, 2026-11-26: "open of uid_map failed: Permission denied",
+  # then "write to uid_map failed: Operation not permitted"). The runner therefore gets its own
+  # capability wrappers (security.wrappers below): they keep the caller's uid, which owns the new
+  # namespace, and add only CAP_SETUID or CAP_SETGID, as Fedora and Debian ship these helpers.
+  # The links below put them on the runner's PATH under the names podman looks up.
+  # The runner has no login session, so podman's systemd cgroup manager fails: crun's sd-bus call is
+  # refused ("Access denied as the requested operation requires interactive authentication", sixth
+  # release run, 2026-11-26). The runner alone uses cgroupfs, no per-container cgroups (release.yml
+  # sets no resource limit, and a session-less rootless user cannot create them) and file event logging, through
+  # CONTAINERS_CONF_OVERRIDE, so the system's podman settings are unchanged.
+  runnerContainersConf = pkgs.writeText "pb-runner-containers.conf" ''
+    [containers]
+    cgroups = "disabled"
+    [engine]
+    cgroup_manager = "cgroupfs"
+    events_logger = "file"
+  '';
+  uidmapWrappers = pkgs.runCommand "pb-runner-uidmap-wrappers" { } ''
+    mkdir -p $out/bin
+    ln -s /run/wrappers/bin/pb-runner-newuidmap $out/bin/newuidmap
+    ln -s /run/wrappers/bin/pb-runner-newgidmap $out/bin/newgidmap
+  '';
+in
 {
+  security.wrappers.pb-runner-newuidmap = {
+    source = "${pkgs.shadow}/bin/newuidmap";
+    capabilities = "cap_setuid+ep";
+    owner = "root";
+    group = "pb-runner";
+    permissions = "u+rx,g+x"; # only root and the runner's group can run it
+  };
+  security.wrappers.pb-runner-newgidmap = {
+    source = "${pkgs.shadow}/bin/newgidmap";
+    capabilities = "cap_setgid+ep";
+    owner = "root";
+    group = "pb-runner";
+    permissions = "u+rx,g+x";
+  };
   # --- 1. The release runner (docs/RELEASING.md "Runner registration through the /etc/nixos flow") ---
   services.github-runners.powerbrowser-release = {
     enable = true;
@@ -64,12 +106,13 @@
     # it deletes everything inside it on every start; the tmpfiles rule in section 3 creates it.
     workDir = "/var/lib/pb-runner";
     extraLabels = [ "powerbrowser-release" ];
-    extraPackages = with pkgs; [ git gh nix podman ];
+    extraPackages = with pkgs; [ git gh nix podman uidmapWrappers ];
     extraEnvironment = {
       ACTIONS_RUNNER_HOOK_JOB_STARTED = "/etc/pb-runner/legion-pre-job-hook.sh";
       # The module sets HOME to workDir, which it wipes on every start. Rootless podman keeps its image
       # store under XDG_DATA_HOME, so the store lives outside workDir and survives a restart.
       XDG_DATA_HOME = "/var/lib/pb-runner-data";
+      CONTAINERS_CONF_OVERRIDE = "${runnerContainersConf}";
     };
     # 59-CR-02: release.yml runs rootless `podman build` and `podman run` on this runner. Each module
     # default below blocks rootless podman, so it is relaxed for this runner only, with the reason.
@@ -81,7 +124,12 @@
       NoNewPrivileges = false; # newuidmap and newgidmap are setuid wrappers in /run/wrappers
       # The module's empty bounding set leaves the setuid helpers euid 0 with no capability, and
       # writing a multi-range uid_map or gid_map needs CAP_SETUID or CAP_SETGID. Nothing else is added.
-      CapabilityBoundingSet = lib.mkForce [ "CAP_SETUID CAP_SETGID" ];
+      # CAP_SETPCAP: NixOS capability wrappers carry cap_setpcap=ep beside the granted capability (the
+      # wrapper uses it to raise that capability into the ambient set), and the kernel refuses to exec a
+      # file whose effective file capabilities the bounding set cannot grant (fifth release run,
+      # 2026-11-26: "fork/exec .../newuidmap: operation not permitted"). It adds no capability the
+      # set does not already allow.
+      CapabilityBoundingSet = lib.mkForce [ "CAP_SETUID CAP_SETGID CAP_SETPCAP" ];
       PrivateDevices = false; # the private /dev has no /dev/fuse (fuse-overlayfs) and no /dev/net/tun (pasta)
       # ProtectClock implies DeviceAllow=char-rtc r, and a non-empty allow list closes every other
       # device, so the two devices rootless podman opens are allowed explicitly ("" first resets).
@@ -101,6 +149,10 @@
       # Both leave locked read-only or inaccessible over-mounts under /proc (/proc/sys, /proc/kmsg and
       # others); the kernel refuses the fresh procfs mount crun makes in the container's user
       # namespace while the existing /proc is covered that way.
+      # Measured on the first release run (2026-11-26): under the module's hidepid ("invisible") the
+      # setuid newuidmap cannot open /proc/<pid> of the process it maps ("Could not open proc directory
+      # for target"), so podman cannot set up its user namespace.
+      ProtectProc = "default";
       ProtectKernelTunables = false;
       ProtectKernelLogs = false;
       # The module's mkBefore deny list minus ~@mount (mount, pivot_root), ~capset (crun drops

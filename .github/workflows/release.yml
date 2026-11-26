@@ -185,14 +185,24 @@ jobs:
         # legion is persistent: rebuild from the digest-pinned base every release, never from a cached layer.
         run: podman build --pull=always --no-cache -t pb-gecko-build -f powerbrowser/packaging/Containerfile .
 
+      # --userns=keep-id:uid=1000,gid=1000 on every podman run that mounts the checkout: the image's USER is
+      # builder (uid 1000), and rootless podman otherwise maps that uid to a subuid of the runner user, which
+      # cannot write the bind-mounted checkout (objdir-release/, the package output). keep-id maps the runner
+      # user itself onto uid 1000 in the container, so builder owns /src and the files it writes belong to the
+      # runner user on the host.
+      # Rust is the one toolchain --enable-bootstrap does not fetch outside Mozilla automation
+      # (toolchain.configure: bootstrap_path("rustc/bin", when=moz_automation)), so the container fetches the
+      # tree's own pinned Rust (taskcluster/kinds/toolchain/rust.yml, alias linux64-rust) with the command the
+      # bootstrap itself runs, `mach artifact toolchain --from-build`, into the same state directory, and puts it
+      # on PATH. clang, sccache, cbindgen and the sysroot still come from the configure-time bootstrap.
       - name: Configure and build the release tree, then verify the toolchain baseline in the container
         if: steps.key_gate.outputs.build == 'true'
         env:
           PB_KEYDIR: ${{ vars.PB_KEYDIR }}
         run: |
           set -euo pipefail
-          podman run --rm -v "$PWD:/src:rw" -v "${PB_KEYDIR:?the Safe Browsing key directory is set on the runner unit}:/keys:ro" -w /src/upstream \
-            pb-gecko-build bash -c 'MOZCONFIG=/src/powerbrowser/packaging/mozconfig.release ./mach build && bash /src/scripts/toolchain-baseline.sh --container > /src/objdir-release/toolchain-measured.txt'
+          podman run --rm --userns=keep-id:uid=1000,gid=1000 -v "$PWD:/src:rw" -v "${PB_KEYDIR:?the Safe Browsing key directory is set on the runner unit}:/keys:ro" -w /src/upstream \
+            pb-gecko-build bash -c 'set -euo pipefail; mkdir -p "$HOME/.mozbuild"; (cd "$HOME/.mozbuild" && /src/upstream/mach artifact toolchain --from-build linux64-rust); export PATH="$HOME/.mozbuild/rustc/bin:$PATH"; MOZCONFIG=/src/powerbrowser/packaging/mozconfig.release ./mach build && bash /src/scripts/toolchain-baseline.sh --container > /src/objdir-release/toolchain-measured.txt'
 
       # AUTO-05: the toolchain the container measured must equal toolchain-baseline.txt line for line, before
       # anything is packaged or uploaded. The measurement runs inside the build container (the bootstrap state
@@ -205,7 +215,7 @@ jobs:
         if: steps.key_gate.outputs.build == 'true'
         run: |
           set -euo pipefail
-          podman run --rm -v "$PWD:/src:rw" -e PB_HOST_ROOT="$PWD" -w /src pb-gecko-build bash powerbrowser/packaging/package-linux.sh
+          podman run --rm --userns=keep-id:uid=1000,gid=1000 -v "$PWD:/src:rw" -e PB_HOST_ROOT="$PWD" -w /src pb-gecko-build bash powerbrowser/packaging/package-linux.sh
 
       # G-49b (ROADMAP Phase 49 criterion 2): the packaged rows and the install matrix judge the built package
       # before anything is uploaded. Each label is one registry row (the release-shape row checks they are
@@ -653,14 +663,16 @@ jobs:
       # headers and libraries) by itself: windows-toolchain.configure:69-85 bootstraps it when WINSYSROOT is unset,
       # and taskcluster/kinds/toolchain/misc.yml:692-709 (win64-vs2026, alias vs) names the hash-pinned
       # build/vs/vs2026.yaml it comes from. Nothing sets WINSYSROOT or downloads a sysroot by hand.
+      # Rust as in build-linux: not bootstrapped outside Mozilla automation, so fetched first; linux64-rust-windows
+      # is the pinned repack that carries the x86_64-pc-windows-msvc target.
       - name: Cross-build the Windows release tree in the container
         if: steps.key_gate.outputs.build == 'true'
         env:
           PB_KEYDIR: ${{ vars.PB_KEYDIR }}
         run: |
           set -euo pipefail
-          podman run --rm -v "$PWD:/src:rw" -v "${PB_KEYDIR:?the Safe Browsing key directory is set on the runner unit}:/keys:ro" -w /src/upstream \
-            pb-gecko-build bash -c 'set -euo pipefail; MOZCONFIG=/src/generated/packaging/mozconfig-windows-x86_64 ./mach build'
+          podman run --rm --userns=keep-id:uid=1000,gid=1000 -v "$PWD:/src:rw" -v "${PB_KEYDIR:?the Safe Browsing key directory is set on the runner unit}:/keys:ro" -w /src/upstream \
+            pb-gecko-build bash -c 'set -euo pipefail; mkdir -p "$HOME/.mozbuild"; (cd "$HOME/.mozbuild" && /src/upstream/mach artifact toolchain --from-build linux64-rust-windows); export PATH="$HOME/.mozbuild/rustc/bin:$PATH"; MOZCONFIG=/src/generated/packaging/mozconfig-windows-x86_64 ./mach build'
 
       - name: Download the hosted Windows sidecar into windows-sidecar/ (data, admitted by its digest before staging)
         if: steps.key_gate.outputs.build == 'true'
@@ -696,7 +708,7 @@ jobs:
           PB_WIN_ORCA_SUMS_SHA256: ${{ needs.windows-orca.outputs.sums_sha256 }}
         run: |
           set -euo pipefail
-          podman run --rm -v "$PWD:/src:rw" -w /src -e PB_WIN_SIDECAR_DIR=/src/windows-sidecar -e PB_WIN_SIDECAR_SUMS_SHA256 \
+          podman run --rm --userns=keep-id:uid=1000,gid=1000 -v "$PWD:/src:rw" -w /src -e PB_WIN_SIDECAR_DIR=/src/windows-sidecar -e PB_WIN_SIDECAR_SUMS_SHA256 \
             -e PB_WIN_ORCA_DIR=/src/windows-orca -e PB_WIN_ORCA_SUMS_SHA256 \
             pb-gecko-build bash powerbrowser/packaging/package-windows.sh
 

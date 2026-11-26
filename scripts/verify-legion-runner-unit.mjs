@@ -58,12 +58,17 @@ export const BLOCKERS = {
     // "private" (systemd 260) allows sethostname inside the unit's own UTS namespace only; false would relax more.
     ProtectHostname: { why: 'crun calls sethostname in the container UTS namespace', blocks: (v) => v === true, ok: (o) => o?.value === 'private', want: '"private"' },
     ProtectKernelTunables: { why: 'its locked /proc over-mounts make the kernel refuse the container procfs mount', blocks: (v) => v === true, ok: isFalse, want: 'false' },
+    // Measured on legion 2026-11-26: under hidepid ("invisible") the setuid newuidmap cannot open
+    // /proc/<pid> of the process it maps ('Could not open proc directory for target').
+    ProtectProc: { why: 'the setuid id-map helpers must open /proc/<pid> of the process they map', blocks: (v) => v === 'invisible' || v === 'noaccess' || v === 'ptraceable', ok: (o) => o?.value === 'default', want: '"default"' },
     ProtectKernelLogs: { why: 'its /proc/kmsg over-mount makes the kernel refuse the container procfs mount', blocks: (v) => v === true, ok: isFalse, want: 'false' },
     CapabilityBoundingSet: {
-        why: 'the setuid id-map helpers need CAP_SETUID and CAP_SETGID',
-        blocks: (v) => !['CAP_SETUID', 'CAP_SETGID'].every((c) => tokens(v).includes(c)),
-        ok: (o) => o?.force && Array.isArray(o.value) && [...tokens(o.value)].sort().join(' ') === 'CAP_SETGID CAP_SETUID',
-        want: 'lib.mkForce [ "CAP_SETUID CAP_SETGID" ] and nothing else',
+        // CAP_SETPCAP measured on legion 2026-11-26: the NixOS capability wrappers carry cap_setpcap=ep, and exec
+        // of a file whose effective file capabilities the bounding set cannot grant fails with EPERM.
+        why: 'the capability-wrapped id-map helpers need CAP_SETUID, CAP_SETGID and their wrapper\'s CAP_SETPCAP',
+        blocks: (v) => !['CAP_SETUID', 'CAP_SETGID', 'CAP_SETPCAP'].every((c) => tokens(v).includes(c)),
+        ok: (o) => o?.force && Array.isArray(o.value) && [...tokens(o.value)].sort().join(' ') === 'CAP_SETGID CAP_SETPCAP CAP_SETUID',
+        want: 'lib.mkForce [ "CAP_SETUID CAP_SETGID CAP_SETPCAP" ] and nothing else',
     },
     DeviceAllow: {
         why: 'a non-empty allow list (ProtectClock implies char-rtc) closes /dev/fuse and /dev/net/tun',
@@ -237,7 +242,9 @@ function selfTest(real, moduleText) {
     const modulePlants = [
         ['RestrictNamespaces left true', 'RestrictNamespaces', (t) => t.replace('RestrictNamespaces = false;', 'RestrictNamespaces = true;')],
         ['bounding set not overridden (review a)', 'CapabilityBoundingSet', (t) => t.replace(/CapabilityBoundingSet = lib\.mkForce \[[^\]]*\];/, '')],
-        ['bounding set wider than needed', 'CapabilityBoundingSet', (t) => t.replace('"CAP_SETUID CAP_SETGID"', '"CAP_SETUID CAP_SETGID CAP_SYS_ADMIN"')],
+        ['ProtectProc not overridden', 'ProtectProc', (t) => t.replace(/\n\s*ProtectProc = "default";/, '')],
+        ['bounding set without CAP_SETPCAP', 'CapabilityBoundingSet', (t) => t.replace('"CAP_SETUID CAP_SETGID CAP_SETPCAP"', '"CAP_SETUID CAP_SETGID"')],
+        ['bounding set wider than needed', 'CapabilityBoundingSet', (t) => t.replace('"CAP_SETUID CAP_SETGID CAP_SETPCAP"', '"CAP_SETUID CAP_SETGID CAP_SETPCAP CAP_SYS_ADMIN"')],
         ['no /dev/net/tun (review b)', 'DeviceAllow', (t) => t.replace('"/dev/net/tun rw"', '')],
         ['ProtectKernelTunables kept (review c)', 'ProtectKernelTunables', (t) => t.replace('ProtectKernelTunables = false;', '')],
         ['ProtectKernelLogs kept (review c)', 'ProtectKernelLogs', (t) => t.replace('ProtectKernelLogs = false;', '')],
