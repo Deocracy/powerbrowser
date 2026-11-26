@@ -106,7 +106,10 @@ in
     # it deletes everything inside it on every start; the tmpfiles rule in section 3 creates it.
     workDir = "/var/lib/pb-runner";
     extraLabels = [ "powerbrowser-release" ];
-    extraPackages = with pkgs; [ git gh nix podman uidmapWrappers ];
+    # util-linux: verify-platform.sh takes the live lock with setsid and flock (first release run past
+    # packaging, 2026-11-26: "flock on the live lock ... ended without taking it"). With it, all seven
+    # packaged rows pass under this unit's PATH with no display.
+    extraPackages = with pkgs; [ git gh nix podman util-linux uidmapWrappers ];
     extraEnvironment = {
       ACTIONS_RUNNER_HOOK_JOB_STARTED = "/etc/pb-runner/legion-pre-job-hook.sh";
       # The module sets HOME to workDir, which it wipes on every start. Rootless podman keeps its image
