@@ -112,6 +112,10 @@ in
       # Both leave locked read-only or inaccessible over-mounts under /proc (/proc/sys, /proc/kmsg and
       # others); the kernel refuses the fresh procfs mount crun makes in the container's user
       # namespace while the existing /proc is covered that way.
+      # Measured on the first release run (2026-11-26): under the module's hidepid ("invisible") the
+      # setuid newuidmap cannot open /proc/<pid> of the process it maps ("Could not open proc directory
+      # for target"), so podman cannot set up its user namespace.
+      ProtectProc = "default";
       ProtectKernelTunables = false;
       ProtectKernelLogs = false;
       # The module's mkBefore deny list minus ~@mount (mount, pivot_root), ~capset (crun drops

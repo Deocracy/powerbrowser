@@ -58,6 +58,9 @@ export const BLOCKERS = {
     // "private" (systemd 260) allows sethostname inside the unit's own UTS namespace only; false would relax more.
     ProtectHostname: { why: 'crun calls sethostname in the container UTS namespace', blocks: (v) => v === true, ok: (o) => o?.value === 'private', want: '"private"' },
     ProtectKernelTunables: { why: 'its locked /proc over-mounts make the kernel refuse the container procfs mount', blocks: (v) => v === true, ok: isFalse, want: 'false' },
+    // Measured on legion 2026-11-26: under hidepid ("invisible") the setuid newuidmap cannot open
+    // /proc/<pid> of the process it maps ('Could not open proc directory for target').
+    ProtectProc: { why: 'the setuid id-map helpers must open /proc/<pid> of the process they map', blocks: (v) => v === 'invisible' || v === 'noaccess' || v === 'ptraceable', ok: (o) => o?.value === 'default', want: '"default"' },
     ProtectKernelLogs: { why: 'its /proc/kmsg over-mount makes the kernel refuse the container procfs mount', blocks: (v) => v === true, ok: isFalse, want: 'false' },
     CapabilityBoundingSet: {
         why: 'the setuid id-map helpers need CAP_SETUID and CAP_SETGID',
