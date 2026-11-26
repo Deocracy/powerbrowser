@@ -1579,6 +1579,23 @@ runs `./mach package` and adds these to the staged application directory:
   downloaded once into `.mozbuild/node-dist/` and sha256-checked against the pin;
 - `distribution/policies.json`.
 
+Two staged parts differ from the built sidecar they come from:
+- the branding block. The sidecar is built once from the tracked `package.json`, whose
+  `powerbrowserBranding` block is the dev variant's. `powerbrowser/packaging/stage-release-branding.mjs`
+  writes the release variant's block into the staged `theia/package.json` and replaces the
+  variant-dependent strings in the staged `theia/lib` (the frontend bundle is what the About dialog
+  reads). The `packaged-identity` row checks the staged `package.json` and every staged `theia/` file.
+- the `better-sqlite3` binding. The npm tarball's `prebuilds/linux-x64.node` needs glibc 2.34, above
+  the shipped floor (`powerbrowser/packaging/portability-floor.json`). In the release container
+  `powerbrowser/packaging/build-better-sqlite3-linux.sh` builds the binding from the package's own
+  source with the bootstrapped clang against the bootstrapped sysroot, using the pinned Node archive
+  for `node` and its headers, and stages it under the same name. A Nix dev shell has no bootstrapped
+  toolchain; there the npm prebuild is staged and the run prints a note saying the package is not a
+  release package.
+
+The Linux release mozconfig carries `--without-onnx-runtime`: the ONNX Runtime library the bootstrap
+would fetch needs glibc 2.34, so the release is built without it, as dev builds are.
+
 The Node download happens at build time and is deliberately not in the
 runtime allowlist: that file governs browser/sidecar egress only (R15).
 
