@@ -63,10 +63,12 @@ export const BLOCKERS = {
     ProtectProc: { why: 'the setuid id-map helpers must open /proc/<pid> of the process they map', blocks: (v) => v === 'invisible' || v === 'noaccess' || v === 'ptraceable', ok: (o) => o?.value === 'default', want: '"default"' },
     ProtectKernelLogs: { why: 'its /proc/kmsg over-mount makes the kernel refuse the container procfs mount', blocks: (v) => v === true, ok: isFalse, want: 'false' },
     CapabilityBoundingSet: {
-        why: 'the setuid id-map helpers need CAP_SETUID and CAP_SETGID',
-        blocks: (v) => !['CAP_SETUID', 'CAP_SETGID'].every((c) => tokens(v).includes(c)),
-        ok: (o) => o?.force && Array.isArray(o.value) && [...tokens(o.value)].sort().join(' ') === 'CAP_SETGID CAP_SETUID',
-        want: 'lib.mkForce [ "CAP_SETUID CAP_SETGID" ] and nothing else',
+        // CAP_DAC_OVERRIDE measured on legion 2026-11-26: nixpkgs' shadow has no libcap, so newuidmap opens the
+        // target's /proc/<pid>/uid_map (owned by the runner user, 0644) as euid 0.
+        why: 'the setuid id-map helpers need CAP_SETUID and CAP_SETGID, and CAP_DAC_OVERRIDE to open the uid_map they write',
+        blocks: (v) => !['CAP_SETUID', 'CAP_SETGID', 'CAP_DAC_OVERRIDE'].every((c) => tokens(v).includes(c)),
+        ok: (o) => o?.force && Array.isArray(o.value) && [...tokens(o.value)].sort().join(' ') === 'CAP_DAC_OVERRIDE CAP_SETGID CAP_SETUID',
+        want: 'lib.mkForce [ "CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE" ] and nothing else',
     },
     DeviceAllow: {
         why: 'a non-empty allow list (ProtectClock implies char-rtc) closes /dev/fuse and /dev/net/tun',
@@ -240,7 +242,9 @@ function selfTest(real, moduleText) {
     const modulePlants = [
         ['RestrictNamespaces left true', 'RestrictNamespaces', (t) => t.replace('RestrictNamespaces = false;', 'RestrictNamespaces = true;')],
         ['bounding set not overridden (review a)', 'CapabilityBoundingSet', (t) => t.replace(/CapabilityBoundingSet = lib\.mkForce \[[^\]]*\];/, '')],
-        ['bounding set wider than needed', 'CapabilityBoundingSet', (t) => t.replace('"CAP_SETUID CAP_SETGID"', '"CAP_SETUID CAP_SETGID CAP_SYS_ADMIN"')],
+        ['bounding set without CAP_DAC_OVERRIDE', 'CapabilityBoundingSet', (t) => t.replace('"CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE"', '"CAP_SETUID CAP_SETGID"')],
+        ['ProtectProc not overridden', 'ProtectProc', (t) => t.replace(/\n\s*ProtectProc = "default";/, '')],
+        ['bounding set wider than needed', 'CapabilityBoundingSet', (t) => t.replace('"CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE"', '"CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE CAP_SYS_ADMIN"')],
         ['no /dev/net/tun (review b)', 'DeviceAllow', (t) => t.replace('"/dev/net/tun rw"', '')],
         ['ProtectKernelTunables kept (review c)', 'ProtectKernelTunables', (t) => t.replace('ProtectKernelTunables = false;', '')],
         ['ProtectKernelLogs kept (review c)', 'ProtectKernelLogs', (t) => t.replace('ProtectKernelLogs = false;', '')],

@@ -92,7 +92,10 @@ in
       NoNewPrivileges = false; # newuidmap and newgidmap are setuid wrappers in /run/wrappers
       # The module's empty bounding set leaves the setuid helpers euid 0 with no capability, and
       # writing a multi-range uid_map or gid_map needs CAP_SETUID or CAP_SETGID. Nothing else is added.
-      CapabilityBoundingSet = lib.mkForce [ "CAP_SETUID CAP_SETGID" ];
+      # CAP_DAC_OVERRIDE (measured 2026-11-26, third release run: "newuidmap: open of uid_map failed:
+      # Permission denied"): nixpkgs' shadow is built without libcap, so newuidmap opens
+      # /proc/<pid>/uid_map as euid 0, and that file belongs to pb-runner, mode 0644.
+      CapabilityBoundingSet = lib.mkForce [ "CAP_SETUID CAP_SETGID CAP_DAC_OVERRIDE" ];
       PrivateDevices = false; # the private /dev has no /dev/fuse (fuse-overlayfs) and no /dev/net/tun (pasta)
       # ProtectClock implies DeviceAllow=char-rtc r, and a non-empty allow list closes every other
       # device, so the two devices rootless podman opens are allowed explicitly ("" first resets).
