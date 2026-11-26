@@ -9,10 +9,19 @@
 // staged-fragment-equals-release-emission check (install-closure half of the
 // verify-branding-preflight source-tree half).
 //
+// The About dialog does not read the staged package.json: `yarn build`
+// compiles the block into the frontend bundle, and the branding extension
+// compiles its fallback notices in beside it. So every file under the staged
+// theia/ is also searched for the notices the dev emission carries and the
+// release emission does not (derived, the difference of the two emissions);
+// one found is red naming the file. A package whose package.json was
+// corrected while its bundle still shows the dev sentence is that case.
+//
 // --self-test twin: mkdtemp fixtures, control green first, then expectRed
 // plants (dev suffix planted in the staged notice per the contract's own
-// plant; one dropped legal notice for the PKG-05 fold-in), each red naming
-// file plus value.
+// plant; one dropped legal notice for the PKG-05 fold-in; the dev notice
+// planted in a staged frontend bundle beside a release package.json), each
+// red naming file plus value.
 //
 // Honestly --quick for the twin only: mkdtemp fixtures, no build, no browser,
 // no display, no network. The full row needs the container-built tarball and
@@ -23,9 +32,9 @@
 //   node scripts/verify-packaged-identity.mjs
 //   node scripts/verify-packaged-identity.mjs --self-test
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { emitTheiaBranding, releaseIdentity, resolveConfig } from './generate.mjs';
@@ -52,12 +61,19 @@ function expectedIdentity() {
     const release = config.variants.find((v) => v.id === 'release');
     if (!release) throw new Error('the manifest declares no build variant with id "release"');
     const branding = JSON.parse(emitTheiaBranding(config, release));
+    // The dev-variant markers: every notice a non-release variant emits that
+    // the release emission does not carry. Derived, so a manifest whose
+    // variants emit the same notices yields none and the file search is void.
+    const devOnlyNotices = [...new Set(config.variants.filter((v) => v.id !== 'release')
+        .flatMap((v) => JSON.parse(emitTheiaBranding(config, v)).legalNotices)
+        .filter((n) => !branding.legalNotices.includes(n)))];
     return {
         esrVersion: identity.esrVersion,
         releaseKey: identity.releaseKey,
         binaryName: config.identity.binary_name,
         vendor: config.product.vendor_machine,
         legalNotices: branding.legalNotices,
+        devOnlyNotices,
     };
 }
 
@@ -110,7 +126,27 @@ function checkStaged(prefix, expected) {
     const surplus = notices.filter((n) => !expected.legalNotices.includes(n));
     for (const n of missing) failures.push(`theia/package.json staged notice set lacks the release-emitted notice ${JSON.stringify(n)} -- staged theia/package.json vs emitLegalNotices(release)`);
     for (const n of surplus) failures.push(`theia/package.json staged notice ${JSON.stringify(n)} is not in the release emission -- dev marker? staged theia/package.json vs emitLegalNotices(release)`);
+    // The built files: the bundle the About dialog reads at run time, and
+    // everything else staged beside it. package.json is judged above.
+    const theiaRoot = join(prefix, 'theia');
+    for (const p of listFiles(theiaRoot)) {
+        const rel = relative(prefix, p);
+        if (rel === join('theia', 'package.json')) continue;
+        const bytes = readFileSync(p);
+        for (const n of expected.devOnlyNotices) {
+            if (bytes.includes(n)) failures.push(`${rel} carries the dev-variant notice ${JSON.stringify(n)}, which the release emission does not -- the built sidecar shows it whatever the staged theia/package.json says`);
+        }
+    }
     return { failures };
+}
+
+function listFiles(dir, out = []) {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) listFiles(p, out);
+        else if (e.isFile()) out.push(p);
+    }
+    return out;
 }
 
 function selfTest() {
@@ -163,6 +199,23 @@ function selfTest() {
             'PowerBrowser' + ' Dev is',
         );
 
+        // Plant 3: the staged package.json carries the release notices while
+        // a staged frontend bundle still carries a dev-variant notice.
+        if (expected.devOnlyNotices.length === 0) {
+            console.error(`${NAME}: --self-test FAIL -- the dev and release emissions carry the same notices, so the dev-notice-in-bundle plant has nothing to plant`);
+            ok = false;
+        } else {
+            expectRed(
+                'dev notice in the staged frontend bundle',
+                (fix) => {
+                    mkdirSync(join(fix, 'theia', 'lib', 'frontend'), { recursive: true });
+                    writeFileSync(join(fix, 'theia', 'lib', 'frontend', 'bundle.js'), `x=${JSON.stringify({ legalNotices: [expected.devOnlyNotices[0]] })};\n`);
+                },
+                join('theia', 'lib', 'frontend', 'bundle.js'),
+                expected.devOnlyNotices[0],
+            );
+        }
+
         // Plant 2 (PKG-05 fold-in): one dropped legal notice. The missing
         // notice text itself is the drift value the red must name.
         const droppedNoticeText = expected.legalNotices[expected.legalNotices.length - 1].slice(0, 40);
@@ -213,7 +266,7 @@ if (SELF_TEST) {
             console.error(`${NAME}: FAIL -- ${failures.length} failure(s) (release key ${expected.releaseKey}):\n  ${failures.join('\n  ')}`);
             process.exit(1);
         }
-        console.log(`${NAME}: PASS -- staged application.ini + theia/package.json branding equal the release derivation (${expected.releaseKey})`);
+        console.log(`${NAME}: PASS -- staged application.ini + theia/package.json branding equal the release derivation, and no staged theia/ file carries a dev-variant notice (${expected.releaseKey})`);
     }).catch((err) => {
         console.error(`${NAME}: FAIL -- ${err.message}. Next step: run: ${BUILD_CMD}`);
         process.exit(1);

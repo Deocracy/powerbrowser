@@ -1579,6 +1579,23 @@ runs `./mach package` and adds these to the staged application directory:
   downloaded once into `.mozbuild/node-dist/` and sha256-checked against the pin;
 - `distribution/policies.json`.
 
+Two staged parts differ from the built sidecar they come from:
+- the branding block. The sidecar is built once from the tracked `package.json`, whose
+  `powerbrowserBranding` block is the dev variant's. `powerbrowser/packaging/stage-release-branding.mjs`
+  writes the release variant's block into the staged `theia/package.json` and replaces the
+  variant-dependent strings in the staged `theia/lib` (the frontend bundle is what the About dialog
+  reads). The `packaged-identity` row checks the staged `package.json` and every staged `theia/` file.
+- the `better-sqlite3` binding. The npm tarball's `prebuilds/linux-x64.node` needs glibc 2.34, above
+  the shipped floor (`powerbrowser/packaging/portability-floor.json`). In the release container
+  `powerbrowser/packaging/build-better-sqlite3-linux.sh` builds the binding from the package's own
+  source with the bootstrapped clang against the bootstrapped sysroot, using the pinned Node archive
+  for `node` and its headers, and stages it under the same name. A Nix dev shell has no bootstrapped
+  toolchain; there the npm prebuild is staged and the run prints a note saying the package is not a
+  release package.
+
+The Linux release mozconfig carries `--without-onnx-runtime`: the ONNX Runtime library the bootstrap
+would fetch needs glibc 2.34, so the release is built without it, as dev builds are.
+
 The Node download happens at build time and is deliberately not in the
 runtime allowlist: that file governs browser/sidecar egress only (R15).
 
@@ -1642,6 +1659,17 @@ row's evidence, the hop included, predates 153.5 and was not re-run at 153.5.
 | Linux / nix-linux | GREEN: packaged `powerbrowser-153.1.0.en-US.linux-x86_64.tar.xz` extracted to a test prefix; fork `distribution/policies.json` installed per the post-build step; staged `application.ini` reads `Vendor=DeBIOS`, `Name=powerbrowser`, `Version=153.1.0`, `BuildID=20260904184538` | GREEN: staged binary alive 25s headless (`MOZ_HEADLESS=1 --profile <test> --no-remote about:blank` inside `nix develop .#firefox`) | GREEN: stock firefox (system 155.0) wrote a 20146-byte headless screenshot while the fork build stayed alive — distinct binaries, profiles, and frozen remoting names (`powerbrowser` vs `firefox`), no profile or remoting collision | GREEN: prefix plus both test profiles removed; `ls ~` before/after diff empty; no `~/.powerbrowser`, no `~/.mozilla` | GREEN: N `153.1.0`/`20260904184538` to N-plus-1 `153.1.1`/`20260904191328`, result `applied` (hop.json); descriptor `update.xml` hash-pinned sha512 `d1184023cbab2e8dc587f7238e890a93cda8f1078bb87284f84c252908c0ec6fb4e2c31106b86ba01171b3637bc7b80a0b38c997de373fe1f4a4ec972c41a3a0` (full value in `.mozbuild/mar-hop/serve/update.xml`), size 78654141; fork-server access log shows the descriptor plus MAR GETs over loopback; client resolver log sifted to zero `*.mozilla.org` / `*.mozilla.net` (only Safe Browsing `update.googleapis.com`) — zero-Mozilla-host proof |
 | Windows 11 / pkg-win11 | staged-unexecuted | staged-unexecuted | staged-unexecuted (must prove no collision against stock Firefox with the frozen remoting and window-class pins) | staged-unexecuted (must include the no-residue check after uninstall) | staged-unexecuted (must cite two distinct versions and build IDs plus fork-server log entries) — unblock for the whole row: capability record above |
 | macOS / pkg-macos | staged-unexecuted | staged-unexecuted | staged-unexecuted | staged-unexecuted | staged-unexecuted — unblock for the whole row: capability record above |
+
+Linux uninstall procedure (owner ruling 2026-11-26). The tarball has no uninstaller. To uninstall:
+quit the browser, delete the extracted application directory, then delete the two per-user
+directories Gecko keeps for it, `~/.config/<vendor>/<name>` (profiles and settings) and
+`~/.cache/<vendor>/<name>` (caches), where `<vendor>` and `<name>` are `Vendor` and `Name` from the
+package's `application.ini` in lower case. Gecko creates both at every start, including a
+start with `--profile`, as stock Firefox does with `~/.config/mozilla/firefox` and
+`~/.cache/mozilla/firefox`. The `install-matrix` row's uninstall cell performs exactly this (it
+derives the two paths from the extracted `application.ini`) and then requires that no other path
+under the home directory is named after the product. The GREEN in the Linux row's uninstall cell
+below the header predates this: it compared `ls ~`, which does not list dot directories.
 
 Two harness faults found and fixed while driving the Linux cells (test-side
 only, no product change): the driver first leaked the fork-prefix

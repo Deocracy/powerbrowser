@@ -109,6 +109,9 @@ cp -a "$APP/lib" "$STAGE/theia/lib"
 find "$STAGE/theia/lib" -name '*.map' -delete
 cp "$APP/package.json" "$STAGE/theia/package.json"
 if [ -d "$APP/plugins" ]; then cp -a "$APP/plugins" "$STAGE/theia/plugins"; fi
+# PKG-05: the sidecar is built once, from the tracked package.json, whose branding block is the dev
+# variant's; the release package carries the release variant's (stage-release-branding.mjs).
+node "$ROOT/powerbrowser/packaging/stage-release-branding.mjs" "$STAGE/theia"
 # F7: better-sqlite3 stays outside the backend bundle (esbuild external in
 # theia/applications/browser/esbuild.mjs), so the packaged backend carries the
 # real package's runtime files: its JS wrapper plus the one linux-x64 prebuilt
@@ -118,7 +121,21 @@ if [ -d "$APP/plugins" ]; then cp -a "$APP/plugins" "$STAGE/theia/plugins"; fi
 mkdir -p "$STAGE/theia/node_modules/better-sqlite3/lib" "$STAGE/theia/node_modules/better-sqlite3/prebuilds"
 cp -a "$ROOT/theia/node_modules/better-sqlite3/lib/." "$STAGE/theia/node_modules/better-sqlite3/lib/"
 cp "$ROOT/theia/node_modules/better-sqlite3/package.json" "$STAGE/theia/node_modules/better-sqlite3/package.json"
-cp "$ROOT/theia/node_modules/better-sqlite3/prebuilds/linux-x64.node" "$STAGE/theia/node_modules/better-sqlite3/prebuilds/linux-x64.node"
+# PKG-22: the npm tarball's prebuilds/linux-x64.node was linked on its publisher's host and needs
+# GLIBC_2.34 and GLIBCXX_3.4.29, above the shipped floor (portability-floor.json), so the release
+# package carries a binding built from the same package's source with the bootstrapped clang against
+# the bootstrapped sysroot (build-better-sqlite3-linux.sh), under the name the loader looks for.
+# The mach state directory holds that toolchain in the release container. A Nix dev shell has none:
+# there the npm prebuild is staged and the run says so, and the portable-elf row is red for that
+# package as it is for every other Nix-built ELF in it.
+BSQ_STATE="${MOZBUILD_STATE_PATH:-$HOME/.mozbuild}"
+if [ -x "$BSQ_STATE/clang/bin/clang" ] && [ -d "$BSQ_STATE/sysroot-x86_64-linux-gnu" ]; then
+    bash "$ROOT/powerbrowser/packaging/build-better-sqlite3-linux.sh" "$ROOT" "$ARCHIVE" "$NODE_VERSION" \
+        "$OBJ/pb-better-sqlite3" "$STAGE/theia/node_modules/better-sqlite3/prebuilds/linux-x64.node"
+else
+    echo "package-linux: NOTE -- no bootstrapped clang and sysroot under $BSQ_STATE, so the npm prebuild of better-sqlite3 is staged; this package is not portable below glibc 2.34 and is not a release package" >&2
+    cp "$ROOT/theia/node_modules/better-sqlite3/prebuilds/linux-x64.node" "$STAGE/theia/node_modules/better-sqlite3/prebuilds/linux-x64.node"
+fi
 # 63-CR-01: the Claude Code process wrapper, where the orca-agents backend's require.resolve finds it.
 bash "$ROOT/powerbrowser/packaging/stage-orca-agents-wrapper.sh" "$ROOT" "$STAGE/theia"
 tar -xJf "$ARCHIVE" -C "$STAGE/node" --strip-components=1 "node-$NODE_VERSION-linux-x64/bin/node" "node-$NODE_VERSION-linux-x64/LICENSE"

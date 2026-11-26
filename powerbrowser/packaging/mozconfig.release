@@ -15,3 +15,4 @@ ac_add_options --disable-crashreporter
 ac_add_options --with-ccache=sccache
 ac_add_options --with-branding=${POWERBROWSER_BRANDING:-powerbrowser/branding-generated/release}
 mk_add_options "export MOZ_APP_REMOTINGNAME=powerbrowser"
+ac_add_options --without-onnx-runtime

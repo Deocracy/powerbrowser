@@ -1757,8 +1757,18 @@ export function emitMozconfigWindows(config, variant) {
  * discipline in powerbrowser/packaging/Containerfile's neighbours), never a
  * manifest key and never the key value -- only the path travels in the tree.
  */
+// PKG-22: with --enable-bootstrap, configure fetches Mozilla's prebuilt ONNX Runtime
+// (toolkit/moz.configure, toolchain onnxruntime-x86_64-linux-gnu) and the package manifest ships it
+// as libonnxruntime.so. That library is built by taskcluster/scripts/misc/build-onnxruntime.sh with
+// no sysroot, on its build image's glibc: it requires GLIBC_2.34, above the shipped floor
+// (powerbrowser/packaging/portability-floor.json, glibc 2.28), and the portable-elf row refuses the
+// package (first release package, 2026-11-26). The Linux release therefore builds without it, as
+// every dev build does (no bootstrap, so no ONNX Runtime): dom/onnx finds no library and the ML
+// engine uses its in-tree wasm backend (MLEngineChild.sys.mjs, "Native onnx runtime not available").
+// The Windows row keeps the bootstrap default: the glibc floor does not apply to it.
+const LINUX_RELEASE_TAIL = Object.freeze(['ac_add_options --without-onnx-runtime']);
 function emitMozconfigRelease(config, variant) {
-    return emitMozconfigFor(config, variant, { bootstrap: true, sbKeyfile: RELEASE_SB_KEYFILE });
+    return emitMozconfigFor(config, variant, { bootstrap: true, sbKeyfile: RELEASE_SB_KEYFILE, tail: [...LINUX_RELEASE_TAIL] });
 }
 
 /**
