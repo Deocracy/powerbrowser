@@ -2,21 +2,24 @@
 # Line order matches `scripts/toolchain-baseline.sh --container`, which the
 # Phase 49 (AUTO-05) drift diff compares against this file.
 #
-# UNMEASURED lines are deliberate: no container build has run yet, so no value
-# in this file is a measurement of the release container. An UNMEASURED line
-# never matches the container output, so the drift diff fails, and the
-# portability ceiling (scripts/verify-portable-elf.mjs) refuses to resolve.
-# Fill each UNMEASURED line by copying the matching line from the container
-# output after the bootstrap build (DSH-BLOCKED.md step 3). Do not type values.
-# rustc/cargo/cbindgen below are the Nix firefox dev shell measurements; the
-# container's bootstrap values replace them when measured.
+# Every value line below is a measurement of the release container: the lines
+# were copied from objdir-release/toolchain-measured.txt, the output of
+# `scripts/toolchain-baseline.sh --container` after the bootstrap build in
+# pb-gecko-build (first measured on legion, 2026-11-26). Do not type values; to
+# change one, rebuild in the container and copy its line. rustc and cargo are
+# the Rust this ESR pins (taskcluster/kinds/toolchain/rust.yml, alias
+# linux64-rust), fetched with `mach artifact toolchain --from-build`; clang,
+# cbindgen and the sysroot come from the configure-time bootstrap. A line
+# reading UNMEASURED never matches the container output, so the drift diff
+# fails, and the portability ceiling (scripts/verify-portable-elf.mjs) refuses
+# to resolve.
 # Image pins (host-measured with podman, not compared by the drift diff):
 #   base debian:bookworm@sha256:854dd8ab51d62866dbd8f5431d15ce77b12983a2a4a1e1fe43a2395dc7ef9f61
 #   apt snapshot 20261019T000000Z (debian and debian-security)
-clang UNMEASURED
-rustc 1.97.1
-cargo 1.97.0
+clang 21.1.8
+rustc 1.94.1
+cargo 1.94.1
 cbindgen 0.29.4
-sysroot UNMEASURED
-sysroot-glibcxx UNMEASURED
-image pb-gecko-build UNMEASURED
+sysroot jessie glibc-2.19
+sysroot-glibcxx GLIBCXX_3.4.28
+image pb-gecko-build bookworm
