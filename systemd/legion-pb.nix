@@ -111,7 +111,12 @@ in
       NoNewPrivileges = false; # newuidmap and newgidmap are setuid wrappers in /run/wrappers
       # The module's empty bounding set leaves the setuid helpers euid 0 with no capability, and
       # writing a multi-range uid_map or gid_map needs CAP_SETUID or CAP_SETGID. Nothing else is added.
-      CapabilityBoundingSet = lib.mkForce [ "CAP_SETUID CAP_SETGID" ];
+      # CAP_SETPCAP: NixOS capability wrappers carry cap_setpcap=ep beside the granted capability (the
+      # wrapper uses it to raise that capability into the ambient set), and the kernel refuses to exec a
+      # file whose effective file capabilities the bounding set cannot grant (fifth release run,
+      # 2026-11-26: "fork/exec .../newuidmap: operation not permitted"). It adds no capability the
+      # set does not already allow.
+      CapabilityBoundingSet = lib.mkForce [ "CAP_SETUID CAP_SETGID CAP_SETPCAP" ];
       PrivateDevices = false; # the private /dev has no /dev/fuse (fuse-overlayfs) and no /dev/net/tun (pasta)
       # ProtectClock implies DeviceAllow=char-rtc r, and a non-empty allow list closes every other
       # device, so the two devices rootless podman opens are allowed explicitly ("" first resets).
