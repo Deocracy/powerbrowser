@@ -58,6 +58,18 @@ let
   # capability wrappers (security.wrappers below): they keep the caller's uid, which owns the new
   # namespace, and add only CAP_SETUID or CAP_SETGID, as Fedora and Debian ship these helpers.
   # The links below put them on the runner's PATH under the names podman looks up.
+  # The runner has no login session, so podman's systemd cgroup manager fails: crun's sd-bus call is
+  # refused ("Access denied as the requested operation requires interactive authentication", sixth
+  # release run, 2026-11-26). The runner alone uses cgroupfs, no per-container cgroups (release.yml
+  # sets no resource limit, and a session-less rootless user cannot create them) and file event logging, through
+  # CONTAINERS_CONF_OVERRIDE, so the system's podman settings are unchanged.
+  runnerContainersConf = pkgs.writeText "pb-runner-containers.conf" ''
+    [containers]
+    cgroups = "disabled"
+    [engine]
+    cgroup_manager = "cgroupfs"
+    events_logger = "file"
+  '';
   uidmapWrappers = pkgs.runCommand "pb-runner-uidmap-wrappers" { } ''
     mkdir -p $out/bin
     ln -s /run/wrappers/bin/pb-runner-newuidmap $out/bin/newuidmap
@@ -100,6 +112,7 @@ in
       # The module sets HOME to workDir, which it wipes on every start. Rootless podman keeps its image
       # store under XDG_DATA_HOME, so the store lives outside workDir and survives a restart.
       XDG_DATA_HOME = "/var/lib/pb-runner-data";
+      CONTAINERS_CONF_OVERRIDE = "${runnerContainersConf}";
     };
     # 59-CR-02: release.yml runs rootless `podman build` and `podman run` on this runner. Each module
     # default below blocks rootless podman, so it is relaxed for this runner only, with the reason.
