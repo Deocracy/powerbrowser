@@ -1,4 +1,4 @@
-# Power Browser
+# PowerBrowser
 
 A rebrandable browser platform: a Gecko shell hosting an Eclipse Theia sidecar
 as its default GUI. The browser boots, supervises a bundled Theia backend on
@@ -13,7 +13,7 @@ none of that.
 
 ## What this repo is
 
-Power Browser is a **platform**, and it is deliberately agnostic. It has no
+PowerBrowser is a **platform**, and it is deliberately agnostic. It has no
 opinion about how you should code — no bundled database, no curated extension
 set, no workflow baked in, no branding beyond a neutral default. It ships that
 way on purpose, so anyone can remake it into the environment they actually
@@ -25,7 +25,7 @@ pinned to an ESR tag, a small stack of patches, and this tree.
 ```
 Firefox ESR + Eclipse Theia     upstream — consumed, never modified
             ↓
-      Power Browser             this repo — the platform
+      PowerBrowser             this repo — the platform
             ↓
        distributions            downstream — add, never patch
 ```
@@ -49,7 +49,7 @@ roughly every two weeks, Theia upgrades by changing a version number.
 ## Rebranding
 
 Anyone redistributing a Firefox derivative **must** rebrand it — Mozilla's
-trademark policy requires it. Power Browser is built so that renaming the
+trademark policy requires it. PowerBrowser is built so that renaming the
 product, swapping icons, and repointing or disabling telemetry happen through
 two inputs and nothing else: [configuration.toml](configuration.toml) and
 [brand/](brand/). Edit a value, run `node scripts/generate.mjs`, and every
