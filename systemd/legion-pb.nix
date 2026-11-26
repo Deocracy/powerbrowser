@@ -48,6 +48,17 @@
 # the price of running rootless podman under this unit, and it is why third-party build code (the
 # agent server's npm closure in particular) should run inside the container or off this host.
 { config, pkgs, lib, ... }:
+let
+  # Rootless podman looks up newuidmap and newgidmap on PATH, and the runner's PATH holds only its
+  # extraPackages, so the first release run on this runner failed with 'exec: "newuidmap":
+  # executable file not found in $PATH' (2026-11-26). The two setuid wrappers NixOS installs in
+  # /run/wrappers/bin are linked here by absolute path; a store copy of shadow's binaries would not
+  # be setuid.
+  uidmapWrappers = pkgs.runCommand "pb-runner-uidmap-wrappers" { } ''
+    mkdir -p $out/bin
+    ln -s /run/wrappers/bin/newuidmap /run/wrappers/bin/newgidmap $out/bin/
+  '';
+in
 {
   # --- 1. The release runner (docs/RELEASING.md "Runner registration through the /etc/nixos flow") ---
   services.github-runners.powerbrowser-release = {
@@ -64,7 +75,7 @@
     # it deletes everything inside it on every start; the tmpfiles rule in section 3 creates it.
     workDir = "/var/lib/pb-runner";
     extraLabels = [ "powerbrowser-release" ];
-    extraPackages = with pkgs; [ git gh nix podman ];
+    extraPackages = with pkgs; [ git gh nix podman uidmapWrappers ];
     extraEnvironment = {
       ACTIONS_RUNNER_HOOK_JOB_STARTED = "/etc/pb-runner/legion-pre-job-hook.sh";
       # The module sets HOME to workDir, which it wipes on every start. Rootless podman keeps its image
