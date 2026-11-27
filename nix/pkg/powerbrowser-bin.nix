@@ -10,14 +10,30 @@
   lib,
   stdenv,
   fetchurl,
-  autoPatchelfHook,
+  patchelf,
   makeWrapper,
   copyDesktopItems,
   jq,
   # The flake's Node binding, passed in by flake.nix. It is the sidecar's PATH fallback only (see the wrapper below).
   nodejs,
-  # The libraries the binaries link against (DT_NEEDED), which autoPatchelfHook resolves from buildInputs.
+  # The libraries the binaries link against (DT_NEEDED); the wrapper puts them on LD_LIBRARY_PATH.
   gtk3,
+  glib,
+  pango,
+  cairo,
+  gdk-pixbuf,
+  atk,
+  libxrandr,
+  libxi,
+  libxfixes,
+  libxdamage,
+  libxcursor,
+  libxcomposite,
+  libxcb,
+  libxrender,
+  freetype,
+  fontconfig,
+  dbus,
   libx11,
   libxext,
   libdbusmenu-gtk3,
@@ -82,8 +98,27 @@ let
     alsa-lib
   ];
   # stdenv.cc.cc.lib is libstdc++, which the Gecko binaries and the staged Node link against.
+  # The libraries the tarball's ELF files name in DT_NEEDED, resolved through the wrapper's
+  # LD_LIBRARY_PATH (nothing is patched; see dontAutoPatchelf). The list was derived by running ldd
+  # over every ELF file of the v153.5.1-1 repack outside any FHS environment.
   runtimeLibs = [
     gtk3
+    glib
+    pango
+    cairo
+    gdk-pixbuf
+    atk
+    libxrandr
+    libxi
+    libxfixes
+    libxdamage
+    libxcursor
+    libxcomposite
+    libxcb
+    libxrender
+    freetype
+    fontconfig
+    dbus
     libx11
     libxext
     libdbusmenu-gtk3
@@ -108,8 +143,16 @@ stdenv.mkDerivation {
   dontBuild = true;
   dontConfigure = true;
 
+  # No ELF file of the tarball is rewritten except each executable's interpreter. Rewriting Mozilla's
+  # libraries (autoPatchelfHook, the stdenv patchELF and strip steps) corrupted their packed
+  # relocations: the first release v153.5.1-1 repacked that way crashed in a library constructor
+  # during dlopen (SIGSEGV in _dl_init). The libraries resolve through LD_LIBRARY_PATH instead.
+  dontAutoPatchelf = true;
+  dontPatchELF = true;
+  dontStrip = true;
+
   nativeBuildInputs = [
-    autoPatchelfHook
+    patchelf
     makeWrapper
     copyDesktopItems
     jq
@@ -128,12 +171,18 @@ stdenv.mkDerivation {
     jq '.policies.DisableAppUpdate = true' "$policies" > "$policies.tmp"
     mv "$policies.tmp" "$policies"
 
-    # The sidecar runs on the tarball's own staged node/bin/node, which autoPatchelfHook patches with the rest of the ELF
-    # files; TheiaService falls back to the first node on PATH only when that file is absent, and nodejs (the flake
+    # The sidecar runs on the tarball's own staged node/bin/node, whose interpreter is set below with the other executables; TheiaService falls back to the first node on PATH only when that file is absent, and nodejs (the flake
     # Node binding) is what the wrapper puts there. LD_LIBRARY_PATH carries the dlopen'd libraries.
+    # Each ELF executable (it has a PT_INTERP) gets the store's dynamic loader; nothing else in the file changes.
+    while IFS= read -r -d "" f; do
+      if [ "$(head -c 4 "$f" | od -An -tx1 | tr -d ' ')" = "7f454c46" ] && patchelf --print-interpreter "$f" >/dev/null 2>&1; then
+        patchelf --set-interpreter "$(cat $NIX_CC/nix-support/dynamic-linker)" "$f"
+      fi
+    done < <(find $out/lib/powerbrowser -type f -perm -u+x -print0)
+
     makeWrapper $out/lib/powerbrowser/powerbrowser $out/bin/powerbrowser \
       --prefix PATH : ${lib.makeBinPath [ nodejs ]} \
-      --prefix LD_LIBRARY_PATH : ${dlopenPath}
+      --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath runtimeLibs}:${dlopenPath}
 
     # The tracked release desktop entry, with its checkout-root placeholders rewritten to the store paths.
     desktop=$out/share/applications/powerbrowser.desktop

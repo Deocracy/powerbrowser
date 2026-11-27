@@ -7,7 +7,9 @@
 //  1. the release key and version   releaseIdentity() via scripts/lib/channel-identity.mjs;
 //  2. the tarball URL and name      <app>-<version>.<token>.tar.xz under /releases/download/<key>/,
 //                                   with the token the first Target key of docs/RELEASING.md's table;
-//  3. the derivation shape          nix/pkg/powerbrowser-bin.nix uses fetchurl, autoPatchelfHook,
+//  3. the derivation shape          nix/pkg/powerbrowser-bin.nix uses fetchurl, sets only each executable's
+//                                   interpreter (no autoPatchelfHook, patchELF or strip: they corrupt
+//                                   Mozilla's packed relocations, first release v153.5.1-1), wrapper LD_LIBRARY_PATH,
 //                                   makeWrapper and copyDesktopItems; builds nothing (dontBuild);
 //                                   takes the flake's nodejs binding and never a nodejs_<N> literal;
 //                                   carries the repack-only DisableAppUpdate merge; names x86_64-linux
@@ -85,14 +87,17 @@ export function runChecks(root, overrides = {}) {
     } else {
         const required = [
             [/\bfetchurl\b/, 'fetchurl fetches the tarball'],
-            [/\bautoPatchelfHook\b/, 'autoPatchelfHook rewrites the ELF interpreter and rpath'],
+            [/dontAutoPatchelf\s*=\s*true/, 'dontAutoPatchelf = true (rewriting the Mozilla libraries corrupts their packed relocations)'],
+            [/dontPatchELF\s*=\s*true/, 'dontPatchELF = true (the stdenv rpath shrink rewrites every ELF file)'],
+            [/dontStrip\s*=\s*true/, 'dontStrip = true (strip rewrites every ELF file)'],
+            [/patchelf --set-interpreter/, 'each executable gets the store dynamic loader'],
             [/\bmakeWrapper\b/, 'makeWrapper wraps the launcher'],
             [/\bcopyDesktopItems\b/, 'copyDesktopItems is in nativeBuildInputs'],
             [/dontBuild\s*=\s*true/, 'dontBuild = true (the derivation compiles nothing)'],
             [/\.policies\.DisableAppUpdate\s*=\s*true/, 'the repack-only DisableAppUpdate merge'],
             [/releases\/download\/\$\{releaseKey\}\/\$\{tarball\}/, 'the tarball URL built from the release key and the derived tarball name'],
             [/makeBinPath \[ nodejs \]/, 'the sidecar PATH takes the flake nodejs binding'],
-            [/--prefix LD_LIBRARY_PATH : \$\{dlopenPath\}/, 'the wrapper puts the dlopen libraries on LD_LIBRARY_PATH, as the nixpkgs firefox wrapper does (WR-08)'],
+            [/--prefix LD_LIBRARY_PATH : \$\{lib\.makeLibraryPath runtimeLibs\}:\$\{dlopenPath\}/, 'the wrapper puts the linked and the dlopen libraries on LD_LIBRARY_PATH, as the nixpkgs firefox wrapper does (WR-08)'],
             [/stdenv\.cc\.cc\.lib/, 'libstdc++ (stdenv.cc.cc.lib) in the runtime libraries'],
             [/platforms\s*=\s*\[\s*"x86_64-linux"\s*\]/, 'platforms is x86_64-linux only'],
             [/release-hash\.json/, 'the hash comes from the tracked hash record'],
@@ -227,6 +232,8 @@ function selfTest() {
     const base = diskReader(REPO_ROOT);
     const { facts } = deriveChannel(REPO_ROOT, base);
     const neighbour = neighbourKey(facts.releaseKey);
+    // The tracked record holds a real hash once a release is published, so the placeholder cases plant it.
+    const placeholderRecord = { read: r => (r === RELEASE_HASH_REL ? `${JSON.stringify({ releaseKey: facts.releaseKey, sha256: SENTINEL_SRI }, null, 2)}\n` : base(r)) };
     const withPlant = (rel, transform) => {
         const original = base(rel);
         const planted = transform(original);
@@ -245,7 +252,7 @@ function selfTest() {
         },
         {
             name: 'placeholder hash refused under --release', expect: RELEASE_HASH_REL,
-            overrides: { release: true },
+            overrides: { release: true, ...placeholderRecord },
         },
         {
             name: 'nodejs_22 sidecar literal', expect: 'nodejs_22',
@@ -265,7 +272,15 @@ function selfTest() {
         },
         {
             name: 'wrapper without the dlopen LD_LIBRARY_PATH prefix (WR-08)', expect: 'LD_LIBRARY_PATH',
-            overrides: withPlant(DERIV_REL, t => t.replace(' \\\n      --prefix LD_LIBRARY_PATH : ${dlopenPath}', '')),
+            overrides: withPlant(DERIV_REL, t => t.replace(' \\\n      --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath runtimeLibs}:${dlopenPath}', '')),
+        },
+        {
+            name: 'automatic ELF patching switched back on', expect: 'dontAutoPatchelf',
+            overrides: withPlant(DERIV_REL, t => t.replace('dontAutoPatchelf = true;', 'dontAutoPatchelf = false;')),
+        },
+        {
+            name: 'strip switched back on', expect: 'dontStrip',
+            overrides: withPlant(DERIV_REL, t => t.replace('dontStrip = true;', '')),
         },
         {
             name: 'libstdc++ dropped from the runtime libraries', expect: 'stdenv.cc.cc.lib',
@@ -309,7 +324,7 @@ function selfTest() {
         },
         {
             name: 'control: placeholder stays green in the quick tier', expect: null,
-            overrides: { release: false },
+            overrides: { release: false, ...placeholderRecord },
         },
     ];
 
