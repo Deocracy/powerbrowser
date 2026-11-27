@@ -44,13 +44,16 @@ done < "$PIN"
 
 L="$SRC/modules/libmar"
 C="$SRC/other-licenses/nsis/Contrib/CityHash/cityhash"
-NSS_FLAGS=$(pkg-config --cflags --libs nss nspr)
+# Libraries go after the sources: Ubuntu's linker defaults to --as-needed, which drops a library named
+# before the objects that use it ("undefined reference to VFY_Update", first sign-publish, 2026-11-26).
+NSS_CFLAGS=$(pkg-config --cflags nss nspr)
+NSS_LIBS=$(pkg-config --libs nss nspr)
 c++ -O2 -c -I"$C" "$C/city.cpp" -o "$SRC/city.o"
 # MAR_CHANNEL_ID and MOZ_APP_VERSION feed only the `signmar` banner; -T, -s and -v do not read them.
 # shellcheck disable=SC2086 -- pkg-config emits separate flags
 cc -O2 -DMAR_NSS -DMAR_CHANNEL_ID='"release-tool"' -DMOZ_APP_VERSION='"pinned-source"' \
-  -I"$L/src" -I"$L/sign" -I"$L/verify" -I"$C" $NSS_FLAGS \
+  -I"$L/src" -I"$L/sign" -I"$L/verify" -I"$C" $NSS_CFLAGS \
   "$L/tool/mar.c" "$L/src/mar_create.c" "$L/src/mar_extract.c" "$L/src/mar_read.c" \
   "$L/sign/mar_sign.c" "$L/sign/nss_secutil.c" "$L/verify/cryptox.c" "$L/verify/mar_verify.c" \
-  "$SRC/city.o" -lstdc++ -o "$OUT/signmar"
+  "$SRC/city.o" $NSS_LIBS -lstdc++ -o "$OUT/signmar"
 sha256sum "$OUT/signmar"
