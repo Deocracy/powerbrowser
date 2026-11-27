@@ -47,7 +47,7 @@
 # path to the registration token (still InaccessiblePaths) or to /home (still ProtectHome). This is
 # the price of running rootless podman under this unit, and it is why third-party build code (the
 # agent server's npm closure in particular) should run inside the container or off this host.
-{ config, pkgs, lib, ... }:
+{ config, pkgs, lib, options, ... }:
 let
   # Rootless podman runs newuidmap and newgidmap from PATH. The kernel lets a multi-range id map be
   # written only by the namespace owner holding CAP_SETUID (or CAP_SETGID) in the parent namespace,
@@ -187,6 +187,16 @@ in
     enable = true;
     registries.search = [ "docker.io" ];
   };
+  # The packaged rows run the portable release tarball on this host, and NixOS has no /usr/lib, so
+  # the tarball's GTK, X11, audio and media libraries come through nix-ld. Same list as
+  # nix/pkg/powerbrowser-bin.nix (buildInputs and dlopen libraries). First release run past the lock
+  # (2026-11-26): "libmozgtk.so: libgtk-3.so.0: cannot open shared object file". With these libraries,
+  # all seven packaged rows pass outside any FHS sandbox. The module default (base libraries) is kept:
+  # setting the option replaces it otherwise.
+  programs.nix-ld.libraries = options.programs.nix-ld.libraries.default ++ (with pkgs; [
+    gtk3 libx11 libxext libdbusmenu-gtk3 alsa-lib libpulseaudio libxscrnsaver libva libgbm cups udev
+    libnotify ffmpeg_8 pciutils vulkan-loader libglvnd speechd-minimal pipewire libkrb5
+  ]);
   users.users.pb-runner = {
     isSystemUser = true;
     group = "pb-runner";
